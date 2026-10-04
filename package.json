@@ -5,11 +5,23 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check": "node --check dist/app.js && node --check dist/model.js",
-    "build": "npm run check && npm test",
+    "check": "node --check dist/app.js && node --check dist/model.js && node --check dist/shared.js && node --check dist/entry.js",
+    "build": "npm run check && npm test && node --env-file-if-exists=.env scripts/build.mjs",
+    "dev": "node --env-file-if-exists=.env scripts/build.mjs && node scripts/serve.mjs",
+    "test:db": "node --test tests/database.integration.js",
+    "test:browser": "playwright test",
     "test:escrow": "node tests/escrow.cjs"
   },
   "engines": {
     "node": ">=22"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "embedded-postgres": "^18.4.0-beta.17",
+    "esbuild": "^0.28.2",
+    "pg": "^8.23.1"
   }
 }
