@@ -34,7 +34,9 @@ This prototype uses native test tokens, not fiat or stablecoins. It does not ver
 
 ## Supabase setup
 
-1. In the Supabase project's **SQL Editor**, run `supabase/migrations/202610040001_shared_plans.sql` once as the project administrator. For a CLI-managed project, link it with `supabase link --project-ref YOUR_PROJECT_REF` and run `supabase db push` instead. Do not apply this migration twice manually.
+The current hosted database is **Hackathon_pj**, project reference `ednddqfwazggfsdaklwp` (also recorded in `supabase/project-ref.txt`). The initial migration has been applied there.
+
+1. For a new Supabase project, run `supabase/migrations/202610040001_shared_plans.sql` once in its **SQL Editor**. For CLI-managed setup, run `supabase link --project-ref "$(cat supabase/project-ref.txt)"` and `supabase db push`. Do not reapply the migration manually to Hackathon_pj.
 2. In **Authentication > Providers**, enable Email and allow sign-ups. Keep the magic-link email template's `{{ .ConfirmationURL }}` link. Configure custom SMTP for delivery to friends outside your Supabase organization; the default mailer has recipient/rate restrictions.
 3. In **Authentication > URL Configuration**, set Site URL to `https://hackathonproj-beige.vercel.app`. Add these Redirect URLs: `https://hackathonproj-beige.vercel.app/`, `https://hackathonproj-beige.vercel.app/plan/*`, `http://127.0.0.1:4173/`, and `http://127.0.0.1:4173/plan/*`. Add the exact origin and `/plan/*` pattern for the feature branch's Vercel preview URL too. Keep each configured local origin/port consistent with the URL you open.
 4. Leave only the usual `public` schema exposed in the Data API; do **not** expose `countmein_private`. Obtain the Project URL and publishable key from the project's connection/API settings. Set the two public environment variables described above locally and on Vercel, then rebuild.
