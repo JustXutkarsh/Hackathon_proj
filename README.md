@@ -16,7 +16,7 @@ Conditional group funding for friends organizing sports and outings.
 
 Use Node 22.9+ and `npm ci`. Configure `.env` using the names in `.env.example`, then run `npm run dev` and open http://127.0.0.1:4173. Use `PORT=4175 npm run dev` if that port is occupied. The build bundles the Supabase browser client with esbuild; this is still a static app, with no framework or application server in production.
 
-`npm run build` checks JavaScript, runs the six existing local model tests, and generates the ignored `dist/shared.bundle.js`. Without public settings, it builds an explicit unconfigured shared screen and keeps the local demo usable. Never open `index.html` as a file URL.
+`npm run build` checks JavaScript, runs the local model and static-server tests, and generates the ignored `dist/shared.bundle.js`. Without public settings, it builds an explicit unconfigured shared screen and keeps the local demo usable. Never open `index.html` as a file URL.
 
 Configuration accepts `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (or `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`). These values are intentionally public and bundled at build time. `.env` is ignored. The build rejects secret keys and legacy JWTs whose role is not `anon`; never supply a service-role key or database password to browser/build configuration.
 
@@ -56,7 +56,7 @@ The frontend reloads database state after mutations, on focus/visibility return,
 
 ## Verification
 
-- `npm test`: existing local practice rules.
+- `npm test`: existing local practice rules and missing-asset/deep-link dev-server regression.
 - `npm run test:db`: starts and removes an isolated real PostgreSQL cluster using the dev-only embedded binary. Emulates Supabase's auth roles/`auth.uid()` boundary and applies the actual migration. Checks grants, RLS defense in depth, response privacy, user-derived ownership, invalid terms, duplicate joins, unauthorized cancellation, refund ownership/duplicates, funded persistence, and deadline enforcement after lock waits. Two independent connections are verified to be blocked on the same plan before competing for the final spot; exactly one succeeds. No hosted database credentials are used. Run as a non-root user.
 - `npx playwright install chromium`, then `npm run test:browser`: isolated browser sessions test create/copy/join/refresh, direct-link reload, auth redirect/callback/restoration/sign-out, display name, request suppression, errors, and local-mode isolation. These browser tests mock the Supabase HTTP boundary; they do **not** prove hosted Auth, SMTP, PostgREST, or Vercel configuration. `PLAYWRIGHT_CHANNEL=chrome npm run test:browser` uses installed Chrome instead. Screenshots are written to ignored `test-results/`.
 - `npm run test:escrow`: existing Solidity checks, after installing the optional dependencies above. Contract source is unchanged and nothing is deployed.
