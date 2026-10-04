@@ -1,0 +1,27 @@
+[hidden]{display:none!important}
+body.shared .practice{flex-wrap:wrap;letter-spacing:0}
+body.shared .practice a{font-size:12px;text-decoration:underline}
+body.shared .avatar{width:auto;min-width:70px;max-width:160px;height:auto;min-height:36px;border-radius:8px;padding:8px;overflow-wrap:anywhere}
+body.shared .hero,body.shared .steps{display:none}
+body.shared main{padding-top:24px}
+body.shared #reset{display:none}
+.shared-status{padding:12px 0;line-height:1.6;overflow-wrap:anywhere}
+.shared-status:empty{display:none}
+.shared-status button{margin-left:12px}
+.shared-detail{grid-column:1/-1;padding:0 0 24px;border-bottom:1px solid var(--line);min-width:0}
+.shared-detail h2,.shared-detail h3,.shared-card h3{overflow-wrap:anywhere}
+.shared-detail .meta{font-size:14px}
+.shared-detail .detail-grid{max-width:700px}
+.shared-detail .actions{max-width:700px}
+.shared-detail .actions button{white-space:normal;min-height:46px}
+.shared-detail .notice{background:none;border:0;border-radius:0;padding:12px 0;max-width:700px}
+body.shared .stats strong small{display:block;margin-top:4px}
+body.shared nav button{white-space:nowrap}
+.shared-card{border-radius:8px}
+.shared-card .card-bottom{flex-wrap:wrap;gap:12px}
+.shared-card .card-bottom a{text-decoration:underline;font-size:13px}
+.shared-card .meta{overflow-wrap:anywhere}
+.shared-back{display:inline-block;text-decoration:underline;margin-bottom:12px}
+fieldset{border:0;padding:0;margin:0;min-width:0}
+body.shared h2,body.shared .eyebrow,body.shared .brand,body.shared .stats strong{letter-spacing:0}
+@media(max-width:680px){body.shared header{gap:10px}body.shared nav{gap:8px}body.shared .avatar{max-width:95px;font-size:11px}body.shared .brand{font-size:19px}body.shared .filters{flex-wrap:wrap}.shared-detail .detail-grid{grid-template-columns:1fr 1fr}.shared-detail .detail-grid strong{font-size:14px}.shared-detail h2{font-size:25px}}
