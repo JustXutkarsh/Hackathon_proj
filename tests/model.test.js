@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {status,join,refund,cancel,release,validatePlan} from '../dist/model.js';
+const t=100000;
+const plan=()=>({title:'Football',location:'Turf',category:'sport',amount:50,target:2,deadline:t+1000,eventAt:t+2000,ownerId:'owner',members:[],ledger:[],cancelled:false,released:false});
+const a={id:'a',name:'A'},b={id:'b',name:'B'};
+test('full funding closes entry and permits one organizer payout',()=>{const p=plan();join(p,a,t);join(p,b,t);assert.equal(status(p,t),'funded');assert.throws(()=>join(p,{id:'c',name:'C'},t));assert.throws(()=>refund(p,'a',t));assert.throws(()=>release(p,'a',t));release(p,'owner',t);assert.throws(()=>release(p,'owner',t));});
+test('deadline is exclusive for entry, inclusive for refunds',()=>{const p=plan();join(p,a,t);assert.throws(()=>join(p,b,p.deadline));refund(p,'a',p.deadline);assert.equal(p.members[0].refunded,true);assert.throws(()=>refund(p,'a',p.deadline));assert.throws(()=>refund(p,'stranger',p.deadline));});
+test('cannot join twice or refund before failure',()=>{const p=plan();join(p,a,t);assert.throws(()=>join(p,a,t));assert.throws(()=>refund(p,'a',t));});
+test('only organizer can cancel open plan; deposits become refundable',()=>{const p=plan();join(p,a,t);assert.throws(()=>cancel(p,'a',t));cancel(p,'owner',t);assert.equal(status(p,t),'refundable');refund(p,'a',t);assert.throws(()=>join(p,b,t));});
+test('a funded plan stays funded after its deadline',()=>{const p=plan();join(p,a,t);join(p,b,t);assert.equal(status(p,t+5000),'funded');assert.throws(()=>cancel(p,'owner',t));});
+test('invalid prices, counts and timing fail validation',()=>{for(const patch of [{amount:0},{amount:1.5},{target:1},{target:3.2},{deadline:t},{eventAt:t},{category:'bogus'}])assert.throws(()=>validatePlan({...plan(),...patch},t));assert.doesNotThrow(()=>validatePlan(plan(),t));});

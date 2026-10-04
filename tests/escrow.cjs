@@ -1,0 +1,37 @@
+// npm install --no-save solc@0.8.30 ethers@6.15.0 ganache@7.9.2
+// node tests/escrow.cjs
+const fs=require('node:fs');
+const path=require('node:path');
+const assert=require('node:assert/strict');
+const solc=require('solc');
+const ganache=require('ganache');
+const {ethers}=require('ethers');
+(async()=>{
+ const root=path.resolve(__dirname,'..');
+ const input={language:'Solidity',sources:{'CountMeIn.sol':{content:fs.readFileSync(path.join(root,'contracts/CountMeIn.sol'),'utf8')}},settings:{optimizer:{enabled:true,runs:200},evmVersion:'paris',outputSelection:{'*':{'*':['abi','evm.bytecode.object']}}}};
+ const output=JSON.parse(solc.compile(JSON.stringify(input)));
+ const errors=(output.errors||[]).filter(x=>x.severity==='error');assert.equal(errors.length,0,JSON.stringify(errors));
+ const artifact=output.contracts['CountMeIn.sol'].CountMeIn;
+ const chain=ganache.provider({logging:{quiet:true},wallet:{totalAccounts:5},chain:{hardfork:'shanghai'}});
+ const provider=new ethers.BrowserProvider(chain);provider.pollingInterval=10;
+ const [owner,a,b,recipient]=await Promise.all([0,1,2,3].map(i=>provider.getSigner(i)));
+ const c=await new ethers.ContractFactory(artifact.abi,artifact.evm.bytecode.object,owner).deploy();await c.waitForDeployment();
+ const price=ethers.parseEther('0.01'),address=await c.getAddress(),to=await recipient.getAddress();
+ const stamp=async()=>Number((await provider.getBlock('latest')).timestamp);
+ const create=async()=>{const t=await stamp();const id=await c.nextId();await(await c.createPlan(to,price,2,t+100,t+200,ethers.ZeroHash)).wait();return id};
+ const tx=async x=>(await x).wait();
+ let passed=0;const check=msg=>{passed++;console.log('PASS '+msg)};
+ const p=await create();
+ await assert.rejects(async()=>tx(c.connect(a).join(p,{value:price-1n})));check('wrong deposit rejected');
+ await tx(c.connect(a).join(p,{value:price}));await assert.rejects(async()=>tx(c.connect(a).join(p,{value:price})));check('duplicate deposit rejected');
+ await assert.rejects(async()=>tx(c.connect(a).claimRefund(p,await a.getAddress())));check('early refund rejected');
+ await assert.rejects(async()=>tx(c.connect(a).cancel(p)));check('unauthorized cancellation rejected');
+ await tx(c.connect(b).join(p,{value:price}));assert.equal(await c.stateOf(p),1n);await assert.rejects(async()=>tx(c.cancel(p)));check('full target confirms and locks cancellation');
+ const before=BigInt(await chain.request({method:'eth_getBalance',params:[to,'latest']}));await tx(c.connect(a).collect(p));const after=BigInt(await chain.request({method:'eth_getBalance',params:[to,'latest']}));assert.equal(after-before,price*2n);await assert.rejects(async()=>tx(c.collect(p)));check('permissionless collection pays only fixed recipient, once');
+ const q=await create();await tx(c.connect(a).join(q,{value:price}));await tx(c.cancel(q));assert.equal(await c.stateOf(q),2n);await tx(c.connect(a).claimRefund(q,to));assert.equal(await c.deposits(q,await a.getAddress()),0n);await assert.rejects(async()=>tx(c.connect(a).claimRefund(q,to)));check('cancellation refunds deposit exactly once');
+ const r=await create();await tx(c.connect(a).join(r,{value:price}));await chain.request({method:'evm_increaseTime',params:[101]});await chain.request({method:'evm_mine',params:[]});assert.equal(await c.stateOf(r),2n);await assert.rejects(async()=>tx(c.connect(b).join(r,{value:price})));await tx(c.connect(a).claimRefund(r,to));check('expired underfilled plan blocks entry and refunds');
+ assert.equal(BigInt(await chain.request({method:'eth_getBalance',params:[address,'latest']})),0n);check('all test deposits accounted for; no residual escrow');
+ await assert.rejects(async()=>tx(c.createPlan(ethers.ZeroAddress,price,2,9999999999,99999999999,ethers.ZeroHash)));check('zero recipient rejected');
+ fs.mkdirSync(path.join(root,'artifacts'),{recursive:true});fs.writeFileSync(path.join(root,'artifacts/CountMeIn.json'),JSON.stringify({contractName:'CountMeIn',compiler:solc.version(),evmVersion:'paris',abi:artifact.abi,bytecode:'0x'+artifact.evm.bytecode.object},null,2));
+ await chain.disconnect();console.log(`${passed} escrow checks passed. Solidity compiled; no public-chain deployment performed.`);
+})().catch(e=>{console.error(e);process.exit(1)});
