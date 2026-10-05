@@ -30,7 +30,7 @@ export function getRuntime() {
     const {data,error}=await db.rpc('release_admin',{p_action:action,p_input:input});
     if (error) {
       console.error(JSON.stringify({event:'database_operation_failed',action,code:error.code || 'unavailable'}));
-      if (error.code==='PGRST202' || error.code==='42883') throw new HttpError(503,'Shared database migration 002 or 003 is missing. Install the missing migrations in Hackathon_pj, then retry.');
+      if (error.code==='PGRST202' || error.code==='42883') throw new HttpError(503,'The verified release database RPC is unavailable. Run the verified release repair in Hackathon_pj or reload its API schema cache, then retry.');
       if (error.code==='PGRST301' || error.code==='42501' || error.status===401) throw new HttpError(503,'The database verifier credential or permissions are incorrect. Check the server-only Supabase service-role setting.');
       if (error.code==='P0002') throw new HttpError(429,'Wait a few seconds before requesting another wallet challenge.');
       if (action==='challenge_consume') throw new HttpError(409,'Wallet challenge was consumed or this wallet belongs to another account.');
