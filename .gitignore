@@ -8,6 +8,7 @@ node_modules/
 *.log
 coverage/
 dist/shared.bundle.js
+build/
 test-results/
 playwright-report/
 deployments/*.local.json

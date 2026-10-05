@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.30;
 
 /// @notice Experimental group escrow for native test tokens. Not audited.
 /// @dev A slot is an address, not a verified person. Venue delivery is offchain.
@@ -20,6 +20,10 @@ contract CountMeIn {
     mapping(uint256 => Plan) public plans;
     mapping(uint256 => mapping(address => bool)) public hasJoined;
     mapping(uint256 => mapping(address => uint256)) public deposits;
+    mapping(uint256 => bool) public cancelled;
+    mapping(address => mapping(bytes32 => bool)) public metadataUsed;
+    mapping(address => mapping(bytes32 => uint256)) public metadataPlanId;
+    mapping(uint256 => uint256) public createdBlock;
     uint256 private locked = 1;
 
     error InvalidPlan();
@@ -36,7 +40,7 @@ contract CountMeIn {
     event Funded(uint256 indexed id);
     event Cancelled(uint256 indexed id);
     event Refunded(uint256 indexed id, address indexed participant, address indexed to, uint256 amount);
-    event Collected(uint256 indexed id, address indexed recipient, uint256 amount);
+    event Collected(uint256 indexed id, address indexed recipient, address indexed to, uint256 amount);
 
     modifier nonReentrant() {
         if (locked != 1) revert Reentrant();
@@ -47,7 +51,14 @@ contract CountMeIn {
 
     function createPlan(address payable recipient, uint96 price, uint16 target, uint64 deadline, uint64 eventAt, bytes32 detailsHash) external returns (uint256 id) {
         if (recipient == address(0) || price == 0 || target < 2 || target > 50 || deadline <= block.timestamp || eventAt <= deadline) revert InvalidPlan();
+        // Scope uniqueness to its organizer so another wallet cannot front-run a commitment.
+        if (detailsHash != bytes32(0)) {
+            if (metadataUsed[msg.sender][detailsHash]) revert InvalidPlan();
+            metadataUsed[msg.sender][detailsHash] = true;
+        }
         id = nextId++;
+        if (detailsHash != bytes32(0)) metadataPlanId[msg.sender][detailsHash] = id;
+        createdBlock[id] = block.number;
         plans[id] = Plan(msg.sender, recipient, price, deadline, eventAt, target, 0, State.Open, detailsHash);
         emit PlanCreated(id, msg.sender, recipient, price, target, deadline, eventAt, detailsHash);
     }
@@ -79,6 +90,7 @@ contract CountMeIn {
         if (msg.sender != p.organizer) revert Unauthorized();
         if (stateOf(id) != State.Open) revert WrongState();
         p.state = State.Refunding;
+        cancelled[id] = true;
         emit Cancelled(id);
     }
 
@@ -96,12 +108,23 @@ contract CountMeIn {
 
     /// @notice Anyone may trigger payment, but funds only go to the immutable recipient.
     function collect(uint256 id) external nonReentrant {
+        _collect(id, plans[id].recipient);
+    }
+
+    /// @notice Only the immutable recipient may redirect its own entitled payout.
+    function collectTo(uint256 id, address payable to) external nonReentrant {
+        if (msg.sender != plans[id].recipient) revert Unauthorized();
+        if (to == address(0)) revert InvalidPlan();
+        _collect(id, to);
+    }
+
+    function _collect(uint256 id, address payable to) private {
         Plan storage p = plans[id];
         if (stateOf(id) != State.Funded) revert WrongState();
         p.state = State.Paid;
         uint256 amount = uint256(p.price) * p.target;
-        (bool ok,) = p.recipient.call{value: amount}("");
+        (bool ok,) = to.call{value: amount}("");
         if (!ok) revert TransferFailed();
-        emit Collected(id, p.recipient, amount);
+        emit Collected(id, p.recipient, to, amount);
     }
 }

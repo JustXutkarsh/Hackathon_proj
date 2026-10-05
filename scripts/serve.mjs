@@ -1,12 +1,16 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
-const root = resolve('dist');
+const root = resolve(process.env.STATIC_ROOT || 'build');
 const types = {'.html':'text/html', '.js':'text/javascript', '.css':'text/css'};
 const server = createServer(async (req, res) => {
   let pathname;
   try { pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname); } catch { res.writeHead(400).end(); return; }
-  const route = pathname === '/' || /^\/local\/?$/.test(pathname) || /^\/plan\/[^/]+\/?$/.test(pathname);
+  if (pathname==='/api/release' || pathname==='/api/reconcile') {
+    const {default:handler}=await import(pathname==='/api/release'?'../api/release.js':'../api/reconcile.js');
+    await handler(req,res); return;
+  }
+  const route = pathname === '/' || /^\/plan\/[^/]+\/?$/.test(pathname);
   const file = resolve(root, route ? 'index.html' : '.' + pathname);
   if (!file.startsWith(root + sep)) { res.writeHead(403).end(); return; }
   try {

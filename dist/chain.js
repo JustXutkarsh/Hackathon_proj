@@ -12,12 +12,20 @@ export const ESCROW_ABI = [
   'function stateOf(uint256) view returns (uint8)',
   'function hasJoined(uint256,address) view returns (bool)',
   'function deposits(uint256,address) view returns (uint256)',
+  'function cancelled(uint256) view returns (bool)',
+  'function metadataUsed(address,bytes32) view returns (bool)', 'function metadataPlanId(address,bytes32) view returns (uint256)',
+  'function createdBlock(uint256) view returns (uint256)',
   'function createPlan(address,uint96,uint16,uint64,uint64,bytes32) returns (uint256)',
   'function join(uint256) payable', 'function cancel(uint256)',
-  'function claimRefund(uint256,address)', 'function collect(uint256)',
+  'function claimRefund(uint256,address)', 'function collect(uint256)', 'function collectTo(uint256,address)',
   'event PlanCreated(uint256 indexed id,address indexed organizer,address indexed recipient,uint96 price,uint16 target,uint64 deadline,uint64 eventAt,bytes32 detailsHash)',
+  'event Joined(uint256 indexed id,address indexed participant,uint256 amount)',
+  'event Funded(uint256 indexed id)', 'event Cancelled(uint256 indexed id)',
+  'event Refunded(uint256 indexed id,address indexed participant,address indexed to,uint256 amount)',
+  'event Collected(uint256 indexed id,address indexed recipient,address indexed to,uint256 amount)',
 ];
 const iface = new Interface(ESCROW_ABI);
+const invalid=message=>Object.assign(Error(message),{safe:true});
 const seconds = value => BigInt(new Date(value).getTime()/1000);
 export const checksum = getAddress;
 export const validWallet = value => isAddress(value) && value.toLowerCase() !== ZeroAddress;
@@ -30,7 +38,7 @@ export function parseMon(value) {
 export const formatMon = value => formatEther(BigInt(value));
 export const explorerTx = hash => `${MONAD_TESTNET.explorerUrl}/tx/${hash}`;
 export const detailsHash = p => keccak256(toUtf8Bytes(JSON.stringify([
-  'CountMeIn/monad-testnet/v1',p.token,p.title,p.activity,p.location,
+  'CountMeIn/monad-testnet/v2',String(p.chain_id || 10143),p.token,p.title,p.activity,p.location,
   checksum(p.escrow_address),checksum(p.organizer_wallet),checksum(p.recipient_wallet),
   String(p.contribution_wei),p.target,seconds(p.deadline).toString(),seconds(p.event_at).toString(),
 ])));
@@ -44,9 +52,9 @@ export function readProvider() {
   return reader;
 }
 export async function verifyProvider(provider, config = MONAD_TESTNET) {
-  if (!config.contractAddress) throw Error('Monad escrow is not deployed yet.');
-  if (BigInt(await provider.send('eth_chainId',[])) !== BigInt(config.chainId)) throw Error('Wrong network. Use Monad Testnet.');
-  if (keccak256(await provider.getCode(config.contractAddress)) !== config.runtimeHash) throw Error('Escrow bytecode does not match this app. Transactions are disabled.');
+  if (!config.contractAddress) throw invalid('Monad escrow is not deployed yet.');
+  if (BigInt(await provider.send('eth_chainId',[])) !== BigInt(config.chainId)) throw invalid('Wrong network. Use Monad Testnet.');
+  if (keccak256(await provider.getCode(config.contractAddress)) !== config.runtimeHash) throw invalid('Escrow bytecode does not match this app. Transactions are disabled.');
 }
 export function assertChainTerms(p, c) {
   if (checksum(c.organizer) !== checksum(p.organizer_wallet) || checksum(c.recipient) !== checksum(p.recipient_wallet) ||
@@ -102,11 +110,12 @@ export async function readEscrow(p, walletAddress, provider = readProvider(), co
   const state = Number(await contract.stateOf(p.chain_plan_id,options));
   const joined = walletAddress ? await contract.hasJoined(p.chain_plan_id,walletAddress,options) : false;
   const deposit = walletAddress ? await contract.deposits(p.chain_plan_id,walletAddress,options) : 0n;
+  const cancelled = await contract.cancelled(p.chain_plan_id,options);
   if ((await provider.getBlock(block.number))?.hash !== block.hash) throw Error('Chain changed while reading. Refresh before transacting.');
-  return {state,count:Number(terms.joined),joined,deposit};
+  return {state,count:Number(terms.joined),joined,deposit,cancelled,blockNumber:block.number,blockHash:block.hash};
 }
 export async function walletEscrow() {
-  if (!window.ethereum) throw Error('Install a compatible wallet to use Monad Testnet.');
+  if (!window.ethereum) throw invalid('Install a compatible wallet to use Monad Testnet.');
   if (BigInt(await window.ethereum.request({method:'eth_chainId'})) !== 10143n) {
     try { await window.ethereum.request({method:'wallet_switchEthereumChain',params:[{chainId:'0x279f'}]}); }
     catch (error) {

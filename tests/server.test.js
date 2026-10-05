@@ -9,11 +9,12 @@ test('dev server survives missing assets and serves deep links with absolute ass
     const [output] = await once(child.stdout,'data');
     const origin = output.toString().match(/http:\/\/127\.0\.0\.1:\d+/)[0];
     assert.equal((await fetch(origin+'/missing-favicon.ico')).status,404);
-    for (const path of ['/','/local','/plan/11111111-1111-4111-8111-111111111111']) {
+    for (const path of ['/','/plan/11111111-1111-4111-8111-111111111111']) {
       const response = await fetch(origin+path);
       assert.equal(response.status,200);
       assert.match(await response.text(),/src="\/entry.js"/);
     }
+    for(const path of ['/local','/app.js','/model.js'])assert.equal((await fetch(origin+path)).status,404);
     const css = await fetch(origin+'/styles.css');
     assert.equal(css.headers.get('content-type'),'text/css');
     assert.equal(css.status,200);

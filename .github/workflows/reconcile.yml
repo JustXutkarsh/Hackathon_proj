@@ -1,0 +1,30 @@
+name: Testnet receipt reconciliation
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: testnet-reconciliation
+  cancel-in-progress: false
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reconcile finalized receipts
+        env:
+          APP_ORIGIN: ${{ vars.COUNTMEIN_APP_ORIGIN }}
+          CRON_SECRET: ${{ secrets.COUNTMEIN_CRON_SECRET }}
+        run: |
+          test -n "$APP_ORIGIN" && test -n "$CRON_SECRET"
+          case "$APP_ORIGIN" in https://*) ;; *) exit 1 ;; esac
+          for attempt in 1 2 3; do
+            if curl --fail-with-body --silent --show-error --max-time 65 \
+              --header "Authorization: Bearer $CRON_SECRET" "$APP_ORIGIN/api/reconcile"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1

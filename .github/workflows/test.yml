@@ -14,5 +14,6 @@ jobs:
       - run: npm run test:db
       - run: npm run test:escrow
       - run: npm run test:chain
+      - run: npm run test:security
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
