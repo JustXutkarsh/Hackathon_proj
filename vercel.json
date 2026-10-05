@@ -2,11 +2,12 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "buildCommand": "npm run build",
-  "outputDirectory": "dist",
+  "outputDirectory": "build",
   "rewrites": [
-    { "source": "/plan/:token", "destination": "/index.html" },
-    { "source": "/local", "destination": "/index.html" }
+    { "source": "/plan/:token", "destination": "/index.html" }
   ],
+  "functions": { "api/*.js": { "maxDuration": 60, "includeFiles": "artifacts/CountMeIn.json" } },
+  "crons": [{ "path": "/api/reconcile", "schedule": "0 0 * * *" }],
   "headers": [{ "source": "/(.*)", "headers": [
     { "key": "Referrer-Policy", "value": "no-referrer" },
     { "key": "X-Content-Type-Options", "value": "nosniff" },

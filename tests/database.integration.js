@@ -6,6 +6,11 @@ import { join } from 'node:path';
 import { createServer } from 'node:net';
 import EmbeddedPostgres from 'embedded-postgres';
 import pg from 'pg';
+import ganache from 'ganache';
+import { BrowserProvider, ContractFactory, keccak256, Wallet } from 'ethers';
+import { compileContract } from '../scripts/compile-contract.mjs';
+import { ReleaseService } from '../server/release.mjs';
+import { transactionFor } from '../dist/chain.js';
 
 let cluster, admin, directory, config;
 const ids = ['00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000004'];
@@ -20,7 +25,7 @@ before(async () => {
   config = {host:'127.0.0.1', port, user:'postgres', password:'local-test-only', database:'postgres'};
   admin = new pg.Client(config); await admin.connect();
   // Supabase supplies these roles, auth.users, and auth.uid(); emulate only that boundary.
-  await admin.query(`create role anon nologin; create role authenticated nologin;
+  await admin.query(`create role anon nologin; create role authenticated nologin; create role service_role nologin;
     create schema auth; create table auth.users(id uuid primary key, email text);
     create function auth.uid() returns uuid language sql stable as
     $$select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid$$;
@@ -174,4 +179,110 @@ test('testnet drafts enforce terms and ownership; references never count as depo
   assert.equal((await preview(null,token)).state,'chain');
   assert.equal((await call(ids[2],'select public.my_plans() as value')).some(p=>p.token===token),false);
   await assert.rejects(call(ids[1],'select * from countmein_private.chain_bookmarks'),/permission denied/);
+});
+
+test('release wallet proofs, immutable drafts, trusted receipt synchronization and backfills use real Postgres and EVM', async () => {
+  await admin.query(await readFile(new URL('../supabase/migrations/202610050003_verified_release.sql',import.meta.url),'utf8'));
+  const chain=ganache.provider({logging:{quiet:true},chain:{chainId:10143,hardfork:'shanghai'},wallet:{totalAccounts:5}});
+  const provider=new BrowserProvider(chain,undefined,{cacheTimeout:-1}); provider.pollingInterval=10;
+  try {
+    const [organizer,friend,recipient]=await Promise.all([0,1,2].map(i=>provider.getSigner(i)));
+    const artifact=compileContract(),contract=await new ContractFactory(artifact.abi,artifact.bytecode,organizer).deploy(); await contract.waitForDeployment();
+    const config={chainId:10143,contractAddress:await contract.getAddress(),runtimeHash:keccak256(artifact.runtime),deploymentBlock:(await contract.deploymentTransaction().wait()).blockNumber};
+    const trusted=async(action,input)=>(await admin.query('select public.release_admin($1,$2) as value',[action,input])).rows[0].value;
+    const service=new ReleaseService({admin:trusted,provider,config,origin:'https://countmein.example'});
+    for (const id of [null,ids[0]]) {
+      await assert.rejects(call(id,"select public.release_admin('record','{}')"),/permission denied/);
+      await assert.rejects(call(id,"select public.create_plan('x','sport','x',1,2,now()+interval '1 hour',now()+interval '2 hours')"),/permission denied/);
+      for(const table of ['chain_receipts','wallet_links','wallet_challenges','pending_transactions','sync_cursors']){
+        await assert.rejects(call(id,'select * from countmein_private.'+table),/permission denied/);
+        await assert.rejects(call(id,'delete from countmein_private.'+table),/permission denied/);
+      }
+    }
+    await assert.rejects(call(null,'select public.my_receipts()'),/permission denied/);
+    const users=[{id:ids[0]},{id:ids[1]}],signers=[organizer,friend];
+    for (let i=0;i<2;i++) {
+      const address=await signers[i].getAddress();
+      const challenge=await service.challenge(users[i],{address});
+      const localWallet=signer=>new Wallet(chain.getInitialAccounts()[signer.address.toLowerCase()].secretKey);
+      await assert.rejects(service.verifyWallet(users[i],{signature:await localWallet(recipient).signMessage(challenge.message)}),/signature/);
+      const signature=await localWallet(signers[i]).signMessage(challenge.message);
+      const results=await Promise.allSettled([service.verifyWallet(users[i],{signature}),service.verifyWallet(users[i],{signature})]);
+      assert.equal(results.filter(r=>r.status==='fulfilled').length,1,'Challenge consumption must be atomic');
+      assert.equal((await call(users[i].id,'select public.my_wallets() as value')).length,1);
+    }
+    const now=(await provider.getBlock('latest')).timestamp;
+    const body={address:await organizer.getAddress(),title:'Six-a-side',description:'Friends meeting at the local turf.',location:'Neighborhood turf',activity:'sport',
+      contribution:'0.01',target:2,deadline:new Date((now+3600)*1000).toISOString(),event_at:new Date((now+7200)*1000).toISOString(),recipient_wallet:await recipient.getAddress(),user_id:ids[3]};
+    await assert.rejects(service.draft({id:ids[3]},body),/ownership/);
+    for(const change of [{target:51},{contribution:'1e3'},{recipient_wallet:'0x'+'0'.repeat(40)},{description:''},{event_at:body.deadline}]) await assert.rejects(service.draft(users[0],{...body,...change}));
+    const p=await service.draft(users[0],body);
+    assert.equal(p.is_owner,true); assert.equal(p.state,'draft'); assert.equal(p.count,null);
+    assert.equal(await preview(null,p.token),null,'Drafts are not public funding invitations');
+    await assert.rejects(admin.query('update countmein_private.plans set title=$1 where invitation_token=$2',['Different agreement',p.token]),/immutable/);
+    const creation=await organizer.sendTransaction(transactionFor(p,'create',body.address)); await creation.wait();
+    await assert.rejects(service.receipt(users[1],{token:p.token,hash:creation.hash}),/Creation terms|ownership/);
+    // The owner may recover from chain success even when the initial database save was missed.
+    assert.equal((await service.refresh(p.token,users[0])).status,'recovered');
+    let published=await preview(null,p.token); assert.equal(published.chain_verified,true); assert.equal(published.state,'open');
+    await assert.rejects(contract.createPlan(body.recipient_wallet,10000000000000000n,2,now+3600,now+7200,p.metadata_hash),/revert|missing revert/);
+    const join=await friend.sendTransaction(transactionFor(published,'join',await friend.getAddress())); await join.wait();
+    await assert.rejects(service.receipt(users[0],{token:p.token,hash:join.hash}),/ownership/);
+    await service.receipt(users[1],{token:p.token,hash:join.hash}); await service.receipt(users[1],{token:p.token,hash:join.hash});
+    assert.equal((await preview(null,p.token)).count,1);
+    assert.equal((await call(ids[1],'select public.my_receipts() as value')).filter(r=>r.kind==='Joined').length,1);
+    assert.equal((await call(ids[0],'select public.my_receipts() as value')).some(r=>r.kind==='Joined'),false,'Organizers cannot read another participant receipt from the account API');
+    await admin.query('grant usage on schema countmein_private to anon,authenticated;grant select on countmein_private.chain_receipts,countmein_private.wallet_links to anon,authenticated');
+    for(const id of [null,ids[0],ids[1]])for(const table of ['chain_receipts','wallet_links']){
+      assert.equal(await call(id,'select count(*)::integer as value from countmein_private.'+table),0,'RLS remains restrictive even if table access is accidentally granted');
+    }
+    await admin.query('revoke select on countmein_private.chain_receipts,countmein_private.wallet_links from anon,authenticated;revoke usage on schema countmein_private from anon,authenticated');
+    const cancel=await organizer.sendTransaction(transactionFor(published,'cancel',body.address)); await cancel.wait();
+    const refund=await friend.sendTransaction(transactionFor(published,'refund',await friend.getAddress())); await refund.wait();
+    await service.reconcile({pages:1}); await service.reconcile({pages:1});
+    const receipts=await call(ids[1],'select public.my_receipts() as value');
+    assert.equal(receipts.filter(r=>r.kind==='Refunded').length,1); assert.equal(receipts[0].status,'confirmed');
+    assert.equal((await preview(null,p.token)).state,'cancelled');
+    assert.equal((await call(ids[1],'select public.my_plans() as value')).find(r=>r.token===p.token).refunded,true);
+    assert.equal(JSON.stringify(await preview(null,p.token)).includes('@private.example'),false);
+    assert.equal((await service.receipt(users[0],{token:p.token,hash:'0x'+'a'.repeat(64)})).status,'submitted','A browser hash alone cannot confirm payment');
+    const replacementPlan=await service.draft(users[0],{...body,title:'Replacement recovery'});
+    const publication=await organizer.sendTransaction(transactionFor(replacementPlan,'create',body.address));await publication.wait();
+    await service.receipt(users[0],{token:replacementPlan.token,hash:publication.hash});
+    const publishedReplacement=await preview(null,replacementPlan.token);
+    await chain.request({method:'miner_stop',params:[]});
+    const pending=await friend.sendTransaction({...transactionFor(publishedReplacement,'join',friend.address),gasLimit:200000,gasPrice:2000000000n});
+    assert.equal((await service.receipt(users[1],{token:replacementPlan.token,hash:pending.hash})).status,'submitted');
+    await assert.rejects(call(ids[1],'select * from countmein_private.pending_transactions'),/permission denied/);
+    const replacement=await friend.sendTransaction({to:friend.address,value:0n,nonce:pending.nonce,gasLimit:21000,gasPrice:4000000000n});
+    await chain.request({method:'evm_mine',params:[]});await chain.request({method:'miner_start',params:[]});await replacement.wait();
+    const realProvider=service.provider;
+    // Some RPCs forget a replaced transaction; recovery must use the previously verified pending record.
+    service.provider=new Proxy(realProvider,{get(target,key){if(key==='getTransaction')return hash=>hash===pending.hash?null:target.getTransaction(hash);const value=target[key];return typeof value==='function'?value.bind(target):value;}});
+    const replaced=await service.replacement(users[1],{token:replacementPlan.token,hash:replacement.hash,original_hash:pending.hash});
+    service.provider=realProvider;assert.equal(replaced.status,'replaced');assert.equal(await contract.hasJoined(publishedReplacement.chain_plan_id,friend.address),false);
+    assert.ok((await call(ids[1],'select public.my_receipts() as value')).some(r=>r.tx_hash===replacement.hash&&r.status==='replaced'));
+    await admin.query("update countmein_private.wallet_challenges set created_at=clock_timestamp()-interval '6 seconds' where user_id=$1",[ids[0]]);
+    const recipientChallenge=await service.challenge(users[0],{address:recipient.address});
+    await service.verifyWallet(users[0],{signature:await new Wallet(chain.getInitialAccounts()[recipient.address.toLowerCase()].secretKey).signMessage(recipientChallenge.message)});
+    let multi=await service.draft(users[0],{...body,title:'Multiple linked wallets',target:3});
+    const publishMulti=await organizer.sendTransaction(transactionFor(multi,'create',organizer.address));await publishMulti.wait();await service.receipt(users[0],{token:multi.token,hash:publishMulti.hash});multi=await preview(null,multi.token);
+    for(const signer of [organizer,recipient]){const deposit=await signer.sendTransaction(transactionFor(multi,'join',signer.address));await deposit.wait();await service.receipt(users[0],{token:multi.token,hash:deposit.hash});}
+    const cancelMulti=await organizer.sendTransaction(transactionFor(multi,'cancel',organizer.address));await cancelMulti.wait();await service.receipt(users[0],{token:multi.token,hash:cancelMulti.hash});
+    for(const [i,signer] of [organizer,recipient].entries()){
+      const claim=await signer.sendTransaction(transactionFor(multi,'refund',signer.address));await claim.wait();await service.receipt(users[0],{token:multi.token,hash:claim.hash});
+      assert.equal((await preview(ids[0],multi.token)).refunded,i===1,'Refunding one linked wallet must not hide another wallet remaining claim');
+    }
+    const invalidCommitment=await service.draft(users[0],{...body,title:'Untrusted manual creation'});
+    await(await contract.createPlan(body.recipient_wallet,1n,2,Date.parse(body.deadline)/1000,Date.parse(body.event_at)/1000,invalidCommitment.metadata_hash)).wait();
+    await service.reconcile();assert.equal(await preview(null,invalidCommitment.token),null,'Mismatched financial terms must never publish or stall unrelated backfill');
+    await admin.query("update countmein_private.sync_cursors set block_hash='0x'||repeat('f',64)");
+    await assert.rejects(service.reconcile(),/checkpoint changed/);
+    assert.equal(await preview(null,p.token),null,'Invalidated publication must fail closed');
+    const invalidated=await call(ids[1],'select public.my_receipts() as value'); assert.ok(invalidated.every(r=>r.status==='invalidated'));
+    await assert.rejects(service.admin('rebuild_reviewed',{escrow_address:await contract.getAddress(),start_block:1,reason:'unchecked'}),/review/);
+    await service.admin('rebuild_reviewed',{escrow_address:await contract.getAddress(),start_block:1,reason:'Test injected checkpoint corrupt; canonical chain receipts independently checked.'});
+    await service.reconcile();assert.equal((await preview(null,p.token)).state,'cancelled');
+    assert.equal((await call(ids[1],'select public.my_receipts() as value')).filter(r=>r.kind==='Refunded'&&r.status==='confirmed').length,1);
+  } finally { provider.destroy(); await chain.disconnect(); }
 });

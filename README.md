@@ -1,98 +1,128 @@
 # CountMeIn
 
-Conditional group funding for friends organizing sports and outings.
+Conditional group funding for friends organizing sports and outings. **Monad testnet - test tokens have no monetary value.** Mainnet/real-value payments are disabled. This release is not independently audited or production-ready.
 
-## Current build
+## Release
 
-- Responsive vanilla HTML/CSS/JavaScript app in `dist/`, preserving the green/cream design.
-- `/`: authenticated shared plans. `/plan/<random UUID>`: permanent invitation, with anonymous preview and authenticated participation.
-- Supabase email magic links, restored sessions, sign-out, and editable display names. The invitation path is included in the email redirect, including when the email is opened in another browser.
-- Demo plans and participation live in Postgres. Demo contributions/refunds are **simulated demo credits**, never real money. Monad Testnet plans use native **test MON**, with participation read from finalized escrow state. Creating a plan does not join the organizer.
-- `/local`: the original browser-local demo, including sample people, fake-friend controls, deadline controls, and demo collection. Local data is never uploaded to Supabase.
-- Funding confirms permanently when the target fills before the deadline. Open contributions remain committed. A missed target or organizer cancellation opens individual, one-time refunds. Funding is not a venue-booking guarantee; booking is shown separately as unverified.
-- Wallet-backed testnet creation, deposits, collection, and refunds are implemented. No public-chain contract deployment has been performed. Without a configured escrow address, testnet creation is disabled; both demo modes remain available.
+- Existing vanilla HTML/CSS/JavaScript stack and responsive green/cream design; Vercel serves `build/` with small Node API functions.
+- Supabase email magic links, session restoration, private display names, sign-out and invitation preservation across devices.
+- Server-verified SIWE wallet challenges bound to account, domain, URI, chain, nonce and five-minute expiry. Consumption is atomic and replay-protected. Injected EIP-1193 externally owned wallets work; embedded wallets, contract-wallet login and sponsored gas are not implemented.
+- Immutable drafts, exact integer test MON amounts, financial review, actual onchain publication/deposits/collection/cancellation/refunds. Creation does not join the organizer. Invitations become shareable only after verified publication.
+- Private receipts and business-state filters, gas estimates, rejected/reverted prompts, durable pending-hash tracking, replacement verification and outage recovery.
+- Finalized-event synchronization with idempotent records, retryable backfills, persistent checkpoints and fail-closed consistency checks.
 
-## Running
+**No demo controls, sample participants, simulated credits or `/local` route are served.** Historical source/model tests and database rows remain preserved, never converted into actual funding. Migration 003 retires the browser-writable legacy RPCs and hides version-1 plans instead of deleting data.
 
-Use Node 22.9+ and `npm ci`. Configure `.env` using the names in `.env.example`, then run `npm run dev` and open http://127.0.0.1:4173. Use `PORT=4175 npm run dev` if that port is occupied. The build bundles the Supabase browser client with esbuild; this is still a static app, with no framework or application server in production.
+## Funding Rules
 
-`npm run build` checks JavaScript, runs the local model and static-server tests, and generates the ignored `dist/shared.bundle.js`. Without public settings, it builds an explicit unconfigured shared screen and keeps the local demo usable. Never open `index.html` as a file URL.
+Immutable terms: 2-50 wallet slots, one exact positive contribution per wallet, fixed recipient, future funding deadline before event time. Financial amounts use integer wei/`BigInt`, never floats. Wallets do not prove unique humans or attendance.
 
-Configuration accepts `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (or `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`). These values are intentionally public and bundled at build time. `.env` is ignored. The build rejects secret keys and legacy JWTs whose role is not `anon`; never supply a service-role key or database password to browser/build configuration.
+Deposits remain committed while open; no change-of-mind withdrawal. Filling all slots strictly before the block-timestamp deadline permanently funds the plan. At the exact deadline, underfilled plans reject deposits and permit individual refunds. Funded plans remain funded later. Only the onchain organizer can cancel an open plan; full funding prevents organizer cancellation or unilateral refunds.
 
-For contract checks, `npm ci` installs the pinned toolchain; run `npm run test:escrow` and `npm run test:chain`. Tests deploy only to an ephemeral local EVM and do not overwrite the existing artifact. Build and deployment compile the source using the same optimizer and Paris EVM settings.
+Anyone can trigger `collect(id)`, which pays only the immutable recipient. The UI offers collection to organizer/recipient; it is **not automatic**. After payout the contract cannot recover funds. Funding does not guarantee booking, attendance or delivery. Post-funding cancellation, disputes and voluntary repayment are outside the contract rules.
 
-## Contract behavior
+Only the depositing wallet can call `claimRefund(id,to)`. Failed transfers preserve claim rights; each deposit refunds once. Network fees are separate and not refunded. No platform fees, yield, upgrade authority, admin sweep or participant loops.
 
-`createPlan(recipient, price, target, deadline, eventAt, detailsHash)` stores immutable funding terms. Participant slots are wallet addresses, not identities. The organizer is not automatically a participant.
+**Recipient failure:** failed collection leaves funding intact. Only the immutable recipient may invoke `collectTo(id,to)` to redirect its own entitlement to a nonzero address. Organizers/administrators cannot redirect it. A recipient contract must have a controlled way to invoke this method; one with no such capability can still trap its own payout. Recipient operability and this policy need independent review before mainnet. Tests cover failed transfers, authorization, reentrancy and double withdrawal.
 
-Each address can join once with exactly `price` native tokens before the deadline. Filling the exact target makes a plan funded permanently. Any caller may then trigger `collect`, which pays only the immutable recipient. This avoids relying on an organizer transaction to deliver funds. The demo UI exposes collection only to the organizer for simplicity.
+## Trust And Privacy
 
-An organizer may cancel only while the plan is open. A missed target at the deadline makes it refundable. Each depositor calls `claimRefund(id, to)` to recover their own deposit. Claims are pull-based; no background process sends refunds automatically. Gas is not refunded. State updates precede external transfers and a global reentrancy guard protects joins, payouts, and refunds.
+Monad determines payments and refund rights. Supabase stores accounts, offchain descriptions, invitation tokens, verified wallet links and receipt caches, never private keys or custodial funds.
 
-This prototype uses native test tokens, not fiat or stablecoins. It does not verify attendance, humans, venue availability, venue delivery, or booking. Collection is a transfer to a named recipient, not a booking guarantee. If a recipient contract rejects payment, collection reverts and funds remain in escrow; recipient design and recovery policy need review before any production use. The contract has no fees, upgrade authority, admin sweep, or yield.
+Backend authentication calls Supabase `getUser`; client-supplied account IDs are ignored. Only `service_role` can execute `release_admin`. All private tables have restrictive RLS and denied client grants. UUID previews expose published terms and aggregate counts, not emails, account IDs or participant lists. There is no public directory. Blockchain wallets/terms/transactions are public even if the invitation is unlisted.
 
-## Supabase setup
+The canonical v2 hash commits chain ID, invitation token, title, activity, location, escrow, organizer, recipient, integer contribution, target, deadline and event time. Description stays offchain and is SQL-frozen with the terms. Commitments are unique **per organizer**, preventing duplicate publication without letting another wallet reserve its commitment. Avoid sensitive personal information and analytics that capture invitation URLs.
 
-The current hosted database is **Hackathon_pj**, project reference `ednddqfwazggfsdaklwp` (also recorded in `supabase/project-ref.txt`). The initial migration has been applied there.
+The verifier checks chain 10143, exact runtime bytecode, canonical finalized receipt, contract emitter, plan ID, sender, calldata, amount and expected event. A supplied hash is only a lookup hint. Receipts are idempotent by chain/contract/hash/log index. Backfill also supports direct contract interactions and nested contract-wallet events. Reverted transactions never become deposits.
 
-1. For a new Supabase project, run `supabase/migrations/202610040001_shared_plans.sql`, then `supabase/migrations/202610040002_monad_testnet.sql` once in its **SQL Editor**. On Hackathon_pj, **only run migration 002**: 001 was previously applied, but 002 has only been verified locally. If using the Supabase CLI instead, first reconcile its migration history with any SQL Editor installations before `supabase db push`; do not replay 001 against existing tables.
-2. In **Authentication > Providers**, enable Email and allow sign-ups. Keep the magic-link email template's `{{ .ConfirmationURL }}` link. Configure custom SMTP for delivery to friends outside your Supabase organization; the default mailer has recipient/rate restrictions.
-3. In **Authentication > URL Configuration**, set Site URL to `https://hackathonproj-beige.vercel.app`. Add these Redirect URLs: `https://hackathonproj-beige.vercel.app/`, `https://hackathonproj-beige.vercel.app/plan/*`, `http://127.0.0.1:4173/`, and `http://127.0.0.1:4173/plan/*`. Add the exact origin and `/plan/*` pattern for the feature branch's Vercel preview URL too. Keep each configured local origin/port consistent with the URL you open.
-4. Leave only the usual `public` schema exposed in the Data API; do **not** expose `countmein_private`. Obtain the Project URL and publishable key from the project's connection/API settings. Set the two public environment variables described above locally and on Vercel, then rebuild.
+Reads consistently use `finalized`, never silently fall back to `latest`. [Monad documentation](https://docs.monad.xyz/developer-essentials/summary) distinguishes two-block consensus finality from the later Verified execution stage. This escrow/cache release uses finalized executed state, not speculative Voted state; it does not settle offchain financial obligations. Additional Verified-stage handling must be reviewed for future real-value/offchain settlement. RPC gas estimates include 20% gas-limit headroom; Monad charges the gas limit, not only gas used.
 
-The client uses Supabase's [browser implicit magic-link flow](https://supabase.com/docs/guides/auth/sessions/implicit-flow), so it does not depend on a verifier saved in the requesting browser. The SDK consumes the callback fragment and persists the session. The app removes callback fragments from the address bar and preserves only the invitation path. A display name is private auth metadata, not an authorization input.
+## Development
 
-## Database access
+Node 22.9+, `npm ci`, ignored `.env` configured from `.env.example`, then `npm run dev` at http://127.0.0.1:4173 (or `PORT=4175 npm run dev`). Match `APP_ORIGIN` to the exact local origin. Missing server/contract configuration fails safely, never simulates deposits.
 
-`countmein_private.plans` and `participations` have RLS enabled with restrictive deny policies, and no client schema/table grants. Clients cannot list either table. Narrow `SECURITY DEFINER` functions have an empty search path and explicitly restricted execution grants, following [Supabase's function security guidance](https://supabase.com/docs/guides/database/functions).
+`npm run build` bundles assets, checks artifact reproducibility and runs unit/API/static-server tests. `npm run artifact` generates ABI, bytecode, runtime, settings and Solidity Standard JSON `input` in `artifacts/CountMeIn.json`. Solidity **0.8.30**, optimizer 200, Paris EVM and direct dependency versions are pinned. Use the lockfile with `npm ci`.
 
-- `preview_plan(p_token)`: anonymous/authenticated access to one unguessable invitation. Returns terms, aggregate count, and caller-specific ownership/join/refund flags. No emails, user IDs, organizer identity, or participant names are returned.
-- `my_plans()`: authenticated users see only plans they created or joined; there is no public directory.
-- `create_plan(...)`: owner is always `auth.uid()`; constraints enforce valid terms, and the function enforces a future deadline.
-- `act_on_plan(p_token, p_action)`: join/cancel/refund use one common `SELECT ... FOR UPDATE` lock before checking the current clock, capacity, membership, or state. The participation primary key prevents duplicate membership. Only the organizer can cancel an open plan, and refunds update only the caller's own unrefunded participation.
-- Testnet RPCs create authenticated drafts and attach owner-supplied, write-once chain references. References are **untrusted hints**, not proof of payment. Testnet counts are null in database previews. `remember_chain_plan` saves only a private bookmark; it cannot fabricate a deposit. `my_plans` includes these bookmarks. Demo mutations reject testnet plans.
-- Testnet previews include public organizer/recipient wallet addresses and escrow references, but no account emails, account IDs, or participant wallet list. On-chain transactions are inherently public. The app verifies network ID, deployed runtime bytecode, finalized creation receipt, emitting contract, sender, calldata, invitation metadata, and immutable terms before enabling transactions.
+## Supabase Setup
 
-An expired open plan is presented as failed even without a background job; a successful refund persists the failed state. A funded plan never expires. Clients cannot change terms or advance deadlines. A UUID invitation has 122 random bits; possession permits preview and sharing, not authorization to act as someone else. Treat links as private invitations. Referrer headers and indexing are disabled; do not add analytics that capture invitation paths.
+Active project: **Hackathon_pj**, reference **ednddqfwazggfsdaklwp**. The backend rejects another project URL. Read-only live checks found `preview_plan` and Email enabled, but **`my_wallets` is absent**. Hosted SMTP, actual email login and two-device participation remain unverified.
 
-The frontend reloads database state after mutations, on focus/visibility return, and every 30 seconds while visible. It never calculates authoritative shared state from local demo records. Pending actions are disabled, and failures show retry/sign-in recovery. An interrupted request may have committed; refresh before trying again. Database uniqueness and refund checks prevent duplicate contributions/refunds on retries.
+1. Inspect installation in this project's SQL Editor:
+   ```sql
+   select to_regprocedure('public.create_chain_plan(text,text,text,text,integer,timestamptz,timestamptz,text,text,text)') as migration_002,
+          to_regprocedure('public.release_admin(text,jsonb)') as migration_003;
+   ```
+2. Migration 001 was previously installed; **do not replay it**. If migration_002 is null, run `supabase/migrations/202610040002_monad_testnet.sql`. Then, if migration_003 is null, run `supabase/migrations/202610050003_verified_release.sql`. These are incremental, not a database reset. Reconcile CLI history before `supabase db push` if SQL was applied manually.
+3. Expose only the usual `public` Data API schema, never `countmein_private`. Set the project URL/publishable key and a **server-only** service-role key.
+4. Authentication > Providers: enable Email/signup, keep `{{ .ConfirmationURL }}` in the email template and configure custom SMTP for friends outside the default mailer's restrictions.
+5. Authentication > URL Configuration: Site URL `https://hackathonproj-beige.vercel.app`. Allow redirects `https://hackathonproj-beige.vercel.app/`, `https://hackathonproj-beige.vercel.app/plan/*`, `http://127.0.0.1:4173/`, `http://127.0.0.1:4173/plan/*`. Add the exact preview origin and its `/plan/*` pattern, and any different local port.
+
+The implicit magic-link flow works without the initiating browser's PKCE verifier. The SDK persists sessions; the app removes callback fragments. Display names are private metadata, not authorization.
+
+## Contract Deployment
+
+**No public contract deployment or public testnet acceptance scenario was performed.** A funded deployer and verified escrow address are unavailable. Read-only RPC verification returned chain 10143. Never use local test fixture mnemonics on a public chain.
+
+1. Obtain test MON for a dedicated testnet wallet from the [official faucet](https://faucet.monad.xyz). [Official testnet settings](https://docs.monad.xyz/developer-essentials/testnet): chain 10143, RPC `https://testnet-rpc.monad.xyz`, explorer `https://testnet.monadscan.com`.
+2. Set `MONAD_DEPLOYER_PRIVATE_KEY` privately in a managed/local environment, run `npm run deploy:monad:testnet`, then unset it. Never paste a seed/private key into chat or add it to Vercel. A user-controlled wallet can alternatively deploy the exact artifact bytecode without constructor arguments.
+3. The script saves `deployments/monad-testnet.json` immediately after submission, then verifies finality, canonical receipt and runtime. After interruption use `npm run deploy:monad:testnet -- --resume`; no signing key is required. Never delete a pending record and blindly deploy again. Its public manifest includes chain, address, transaction, block, compiler/settings, runtime hash and ABI.
+4. Verify source on Monadscan with the artifact's `input` as Solidity Standard JSON: compiler `v0.8.30+commit.73712a01`, optimizer 200, Paris, no constructor arguments. Record the explorer verification result/URL. Source verification is not claimed without explorer confirmation.
+5. Set the new public escrow address and deployment block in local/Vercel configuration. Old deployment bytecode is intentionally rejected.
+
+## Vercel Setup
+
+Root `.`, framework Other, Node 22.x+, build `npm run build`, output **`build`**, not `dist`. The config packages Node APIs, sets 60-second function limits, privacy headers and invitation rewrites.
+
+Live checks found production still serves the **older shared bundle** and `/api/release` returns 404. A feature preview does not upgrade production, install SQL or deploy a contract. Do not merge automatically.
+
+Set these per Preview/Production environment and redeploy:
+
+| Variable | Value |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://ednddqfwazggfsdaklwp.supabase.co` |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | This project's public client key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only Supabase credential |
+| `APP_ORIGIN` | Exact HTTPS preview/production origin, no trailing slash/path |
+| `MONAD_TESTNET_ESCROW_ADDRESS` | New verified deployment address |
+| `MONAD_TESTNET_DEPLOYMENT_BLOCK` | Deployment receipt block number |
+| `CRON_SECRET` | Random secret, at least 32 characters |
+| `MONAD_TESTNET_RPC_URL` | Optional HTTPS RPC supporting finalized/history/logs |
+| `MONAD_TESTNET_EXPLORER_URL` | Optional trusted HTTPS explorer; default Monadscan |
+
+Public variables are bundled at build time; server secrets/signing keys are not. GET `/api/release` checks deployed runtime/configuration/database checkpoint; a 200 is **not** security or end-to-end acceptance. POST requires exact Origin and a verified session, except anonymous refresh of published invitations.
+
+## Reconciliation And Recovery
+
+No permanent background process is assumed on Vercel. GET `/api/reconcile` requires `Authorization: Bearer <CRON_SECRET>`, processes up to four 1000-block pages and returns `processed/checkpoint/finalized/lag_blocks`. Checkpoints advance only after verified records commit. Retries/restarts replay safely. Monitor growing lag and failures.
+
+- Vercel config includes a **daily fallback** compatible with Hobby limits; this is not timely indexing.
+- `.github/workflows/reconcile.yml` polls every five minutes with retries. Configure repository variable `COUNTMEIN_APP_ORIGIN` and secret `COUNTMEIN_CRON_SECRET` matching Vercel. Scheduled workflows run from the **default branch only**, not merely a pushed feature branch. Until reviewed/merged, invoke the authenticated endpoint manually or configure an external scheduler. A suitable Vercel plan can schedule five-minute polling instead. GitHub scheduling is best-effort, not an SLA.
+- `npm run reconcile -- --backfill` runs up to 100 batches with private server configuration for initial catch-up; repeat until lag is near zero.
+- Invitation views refresh after mutations, on return and every 30 visible seconds. Direct chain reads protect preparation despite index lag. Dashboard/history are caches; open the invitation or backfill when a direct-chain transaction is missing. History is limited to the latest 200 private records; contribution/refund summaries use that window, not an all-time financial statement.
+- A changed checkpoint halts indexing and invalidates cached receipts/publication. Back up and independently review chain/runtime/receipts. Only afterward set `CHAIN_REVIEW_REASON` (20-500 characters) and run `npm run reconcile -- --rebuild-reviewed --backfill`. This replays verified events without deleting data; absent canonical receipts stay invalidated. Missing/changed immutable creation references need incident investigation, never silent reassignment.
+- Closing a prompt/browser does not cancel or confirm a transaction. **Check transaction** supports original/replacement hashes. Same wallet/nonce and verified original intent are required. If no RPC ever exposed the original before evicting it, automatic replacement attribution is unavailable: inspect wallet/explorer/nonce before resubmitting. Published escrow can recover through organizer-scoped metadata even after browser-storage or database failure.
+
+**Direct contract rights when the frontend is unavailable:** use the recorded ABI/address on chain 10143 through a trusted wallet/explorer. Read `plans(id)`, `stateOf(id)`, `deposits(id,yourWallet)`. The depositing wallet calls `claimRefund(id,addressYouControl)` when Refunding; anyone can trigger `collect(id)` when Funded. Only the immutable recipient can call `collectTo(id,addressItControls)`. Contract wallets must invoke through their controller. Supabase/server availability never changes those rights.
 
 ## Verification
 
-- `npm test`: existing local practice rules and missing-asset/deep-link dev-server regression.
-- `npm run test:db`: starts and removes an isolated real PostgreSQL cluster using the dev-only embedded binary. Emulates Supabase's auth roles/`auth.uid()` boundary and applies the actual migration. Checks grants, RLS defense in depth, response privacy, user-derived ownership, invalid terms, duplicate joins, unauthorized cancellation, refund ownership/duplicates, funded persistence, and deadline enforcement after lock waits. Two independent connections are verified to be blocked on the same plan before competing for the final spot; exactly one succeeds. No hosted database credentials are used. Run as a non-root user.
-- `npx playwright install chromium`, then `npm run test:browser`: isolated browser sessions test create/copy/join/refresh, direct-link reload, auth restoration, request suppression, errors, local-mode isolation, wallet rejection, and responsive testnet screens. Two injected wallet bridges also exercise activation, deposits, collection, cancellation/refund, and reload recovery after a failed reference save against a real local EVM. Supabase HTTP is mocked; these tests do **not** prove hosted Auth, SMTP, PostgREST, Vercel, or a real wallet extension. `PLAYWRIGHT_CHANNEL=chrome npm run test:browser` uses installed Chrome instead. Screenshots are written to ignored `test-results/`.
-- `npm run test:escrow`: Solidity authorization, duplicate deposits, early/repeat/unauthorized refunds, exact refund amounts, collection and deadline tests. Original contract source is unchanged.
-- `npm run test:chain`: real local EVM verifies client contract/receipt checks, metadata tampering, wrong network/code, nonfinal/reorganized receipts, and simultaneous final-slot transactions (both submitted before mining; exactly one succeeds). This does not prove public Monad finality or RPC availability.
-- GitHub Actions runs build/model, real-Postgres, Solidity/client-chain, and Chromium checks on pushes and pull requests. Vercel's static build does not need to start a database/browser. Ganache is dev-only and uses a JS fallback when its native binary does not support the installed Node version; its bundled legacy dependencies have known audit advisories and are not shipped in the browser.
+| Command | Verified Locally |
+| --- | --- |
+| `npm run build` / `npm test` | Original model, API authentication/origin/privacy, SIWE domain/nonce/expiry/replay, artifact and invite/missing-asset routes |
+| `npm run test:db` | Real isolated PostgreSQL, actual migrations; auth roles emulated. Grants/RLS, ownership/privacy, concurrent capacity regressions, immutable drafts, wallet linking, receipt idempotency, replacement recovery, backfill and halt/rebuild |
+| `npm run test:escrow` | Existing local Solidity financial-rule checks |
+| `npm run test:chain` | Actual local EVM, wrong amounts/chain/runtime, metadata tampering, nonfinal/noncanonical receipts and simultaneous final-slot transactions |
+| `npm run test:security` | Actual local EVM, rejected/reentrant transfers, preserved claims, recipient-only redirection, double withdrawal, plan isolation, exact deadline and organizer-scoped commitment uniqueness |
+| `npm run test:browser` | Playwright with real local PostgreSQL/EVM; Auth HTTP and injected wallet transport mocked. Publish/outage recovery, two-account deposits/payout, cancel/refund, pending reload, wallet/network changes, rejected prompts and reverts |
 
-## Enable Monad Testnet
+Install Chromium with `npx playwright install chromium`, or `PLAYWRIGHT_CHANNEL=chrome npm run test:browser`. Screenshots are ignored under `test-results/`. CI runs all suites. Historical demo browser tests remain preserved but are superseded because their routes no longer exist.
 
-1. Apply SQL migration **002** as described above; keep the private schema unexposed.
-2. Use a dedicated, disposable testnet deployer wallet and obtain test MON from the [official faucet](https://faucet.monad.xyz). Never use a mainnet wallet/private key. The [official testnet documentation](https://docs.monad.xyz/developer-essentials/testnet) and [current network facts](https://docs.monad.xyz/ai/current-facts) specify chain ID **10143**, RPC `https://testnet-rpc.monad.xyz`, explorer `https://testnet.monadscan.com`.
-3. Set `MONAD_DEPLOYER_PRIVATE_KEY` privately in your local shell, then run `npm run deploy:monad:testnet`. Never paste it into chat, commit it, or add it to Vercel. The script checks the actual RPC chain ID, saves the transaction hash immediately to `deployments/monad-testnet.json`, waits for confirmations and checks runtime code. It refuses to overwrite an existing record: on an interrupted run, inspect that transaction before retrying. Never delete a submitted record and blindly deploy again. Unset the private variable afterward.
-4. Set the resulting **public** address as `MONAD_TESTNET_ESCROW_ADDRESS` in local `.env` and Vercel Preview/Production environment settings. RPC/explorer overrides are optional and must use HTTPS. Run `npm run build` locally and redeploy Vercel. Use `npm ci` so build/deploy have the identical compiler/runtime. Do not reuse a deployment from a different compiler build.
-5. Sign in, create a shared plan, select **Monad Testnet**, and enter its fixed recipient. Connect the organizer wallet, create the draft, then **Activate testnet escrow**. Activation pays gas but does not deposit or join. Share the permanent invitation after activation.
-6. With two separate wallets, deposit the exact test MON contribution. Full funding enables permissionless collection to the fixed recipient; cancellation/expiry enables each depositor's refund. The UI refunds to the connected depositing wallet. Testnet slots are wallet addresses, **not authenticated people**; one account can control multiple wallets. Embedded wallets, gas sponsorship, wallet/account identity binding, and venue-booking verification are not implemented.
+**Still not verified:** public Monad funded/collected and cancelled/expired/refunded scenarios; hosted two-email login, SMTP and session restoration; actual wallet extension/replacement behavior; Vercel API/cron deployment; source verification; five-friend trial. Local EVM transfers are actual local transactions, **not public testnet acceptance evidence**. These require the missing provider/server settings and controlled funded wallets.
 
-Wallet approval is not success. Submitted transaction hashes survive refresh; finalized receipts and matching calldata are required before confirmation. RPC errors leave transactions unresolved, never successful. Use **Check submitted transaction** to recover, including a speed-up/replacement hash. A finalized same-sender/same-nonce cancellation clears tracking without attributing success. If a creation transaction finalized but attaching it failed or the browser lost storage, the organizer can use **Recover escrow transaction** with its hash. Do not reactivate an existing draft blindly. Clearing browser storage does not cancel a chain transaction. Read-only RPC must support `finalized`; the app fails closed if it cannot verify finality.
+Production dependency audit reports no known advisories. Dev-only Ganache dependencies have advisories and a native-module warning on newer Node; the tested JS fallback is not shipped to the app. Local tests are not a security audit.
 
-**Still requires external verification:** deploy and exercise the contract on public Monad Testnet; configure migration 002 and Vercel settings; test real wallet rejection, speed-up/cancellation, disconnects, and reloads; run one funded and one cancelled/expired plan with friends. No public deployment, hosted migration 002, live-wallet deposits, SMTP delivery, sponsored transactions, or five-friend trial has been performed by the automated tests.
+## Mainnet Blockers
 
-Before accepting the hosted deployment, use two separate browsers/accounts: A creates a plan and copies its URL; B opens it anonymously, signs in from the email, and joins; both refresh and see the same count. Check direct URL refresh, expired email recovery, an unauthorized cancel call, two users competing for the last spot, and one refund each after cancellation/expiry. Also verify anonymous table/directory reads and mutations are denied. These hosted checks require the migration, redirect allowlist, working SMTP and two controlled email accounts; local automated checks do not replace them.
+Future real-value flow: sign in, access wallet, obtain supported Monad asset, publish immutable terms, authorize escrow deposits, verify chain receipts, collect full funding or exercise depositor-controlled refunds. Monitoring/support cannot override ownership. Crypto-to-bank conversion requires a separate off-ramp, not included automatically.
 
-## Deploy to Vercel
-
-Keep production on `main` until this feature branch is reviewed. Push `feature/monad-testnet-payments` to get a Vercel Preview deployment; do not merge automatically.
-
-- Root directory: repository root (`.`).
-- Framework preset: Other.
-- Build command: `npm run build`.
-- Output directory: `dist`.
-- Node version: 22.x or newer.
-- Environment variables: `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, set for **Preview** and **Production**. Use the project's public values, never database/admin secrets. Redeploy after changing them.
-
-`vercel.json` supplies the build/output settings, headers, and rewrites for `/plan/:token` and `/local`. Assets have absolute paths so direct invitation refreshes work. Only `dist/` is served; migrations and tests remain private project files. Supabase must be configured separately; hosting does not install SQL or deploy the escrow.
-
-Vercel configuration reference: https://vercel.com/docs/project-configuration/vercel-json
+Before mainnet: final cancellation/dispute policy; independent contract security review and findings resolved; recipient recovery/operability review; payment-asset/token-specific review if adopting a stablecoin; reliable RPC/indexing/monitoring/recovery procedures; secure deployment/key handling; real-wallet/hosted-auth/support and incident testing; applicable business/legal review; explicit mainnet deployment and operating-cost approval. Real-value activity remains disabled.

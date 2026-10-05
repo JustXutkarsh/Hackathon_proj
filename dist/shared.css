@@ -26,5 +26,24 @@ body.shared nav button{white-space:nowrap}
 .shared-card .meta{overflow-wrap:anywhere}
 .shared-back{display:inline-block;text-decoration:underline;margin-bottom:12px}
 fieldset{border:0;padding:0;margin:0;min-width:0}
+.release .practice{font-size:12px;letter-spacing:0}
+.release .stats{border-radius:8px}
+.release .filters button{border-radius:6px}
+.release #intro{padding:12px 0 32px;max-width:640px}
+.release #intro h1{font-size:32px;margin:0 0 12px}
+.release #intro p{line-height:1.6;color:var(--muted)}
+.release .filters{flex-wrap:wrap}
+.release .card .price{overflow-wrap:anywhere;letter-spacing:0}
+.release .shared-detail .detail-grid>div{border-radius:8px}
+.release textarea{font:inherit;width:100%;padding:12px;border:1px solid #d6decf;border-radius:7px;background:white;color:var(--ink);resize:vertical}
+.release input:focus-visible,.release select:focus-visible,.release textarea:focus-visible{outline:3px solid #85a848;outline-offset:2px}
+.check-label{display:flex;align-items:flex-start;gap:10px;line-height:1.6}
+.check-label input{width:18px;height:18px;flex:none;margin-top:2px}
+#receipt-history{margin-top:36px;border-top:1px solid var(--line);padding-top:18px}
+.receipt{display:flex;flex-wrap:wrap;justify-content:space-between;gap:14px;padding:18px 0;border-bottom:1px solid var(--line);min-width:0}
+.receipt p{margin:8px 0}.receipt small{color:var(--muted)}
+.receipt-hash{overflow-wrap:anywhere;max-width:100%;text-decoration:underline;font:12px monospace;align-self:center}
+.release .empty{border-radius:6px}
 body.shared h2,body.shared .eyebrow,body.shared .brand,body.shared .stats strong{letter-spacing:0}
+body.shared .stats>div{min-width:0}body.shared .stats strong{overflow-wrap:anywhere}
 @media(max-width:680px){body.shared header{gap:10px}body.shared nav{gap:8px}body.shared .avatar{max-width:95px;font-size:11px}body.shared .brand{font-size:19px}body.shared .filters{flex-wrap:wrap}.shared-detail .detail-grid{grid-template-columns:1fr 1fr}.shared-detail .detail-grid strong{font-size:14px}.shared-detail h2{font-size:25px}}
