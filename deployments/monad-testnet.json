@@ -1,0 +1,14 @@
+{
+  "status": "confirmed",
+  "network": "Monad Testnet",
+  "chainId": 10143,
+  "address": "0x63e748D0b64DF798885348b0d036cA2E07A51059",
+  "transactionHash": "0xdba030ac46d56fa86a2e9c843a88daf74169305f7c919e8f83ed02b8b4f8cc10",
+  "blockNumber": 68409889,
+  "blockHash": "0xb14d0a48361aeaef73054bcf64432c8171d0873d2af8d00970c962dcc5cbd168",
+  "deployer": "0x0d13FB2eAee05c61C5A3013065F445504473C428",
+  "runtimeHash": "0x92a30569351df7c0ee7f2ef9f5a1edfdc64399fe9966c7a7e294c90158a34e86",
+  "compiler": "0.8.30+commit.73712a01.Emscripten.clang",
+  "artifact": "artifacts/CountMeIn.json",
+  "sourceVerified": false
+}

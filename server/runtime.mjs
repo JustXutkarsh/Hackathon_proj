@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { JsonRpcProvider, FetchRequest, keccak256 } from 'ethers';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { ReleaseService, HttpError } from './release.mjs';
 
 const project='ednddqfwazggfsdaklwp';
@@ -28,13 +29,22 @@ export function getRuntime() {
   const admin=async(action,input)=>{
     const {data,error}=await db.rpc('release_admin',{p_action:action,p_input:input});
     if (error) {
+      console.error(JSON.stringify({event:'database_operation_failed',action,code:error.code || 'unavailable'}));
+      if (error.code==='PGRST202' || error.code==='42883') throw new HttpError(503,'Shared database migration 002 or 003 is missing. Install the missing migrations in Hackathon_pj, then retry.');
+      if (error.code==='PGRST301' || error.code==='42501' || error.status===401) throw new HttpError(503,'The database verifier credential or permissions are incorrect. Check the server-only Supabase service-role setting.');
       if (error.code==='P0002') throw new HttpError(429,'Wait a few seconds before requesting another wallet challenge.');
       if (action==='challenge_consume') throw new HttpError(409,'Wallet challenge was consumed or this wallet belongs to another account.');
       throw new HttpError(503,'Database synchronization failed. Your onchain transaction can still be recovered.');
     }
     return data;
   };
-  runtime={service:new ReleaseService({admin,provider,config,origin}),auth,origin};
+  const rateLimit=async(req,user)=>{
+    const identity=user?.id || createHash('sha256').update(String(req.headers['x-real-ip'] || req.socket?.remoteAddress || 'anonymous')).digest('hex');
+    const {data,error}=await db.rpc('release_request_limit',{p_bucket:`api:${identity}`,p_max:user?60:30});
+    if(error)throw new HttpError(503,'Request protection is unavailable. Install migration 004 and check verifier permissions.');
+    if(!data)throw new HttpError(429,'Too many requests. Wait one minute before retrying.');
+  };
+  runtime={service:new ReleaseService({admin,provider,config,origin}),auth,origin,rateLimit};
   return runtime;
 }
 export async function authenticated(req,runtime,optional=false) {
@@ -61,5 +71,6 @@ export function reply(res,status,data) {
   res.statusCode=status; res.end(JSON.stringify(data));
 }
 export function failure(res,error) {
-  reply(res,error instanceof HttpError?error.status:503,{error:error instanceof HttpError?error.message:'Verification is unavailable. Retry; no payment has been marked successful.'});
+  console.error(JSON.stringify({event:'request_failed',status:error instanceof HttpError?error.status:503,code:error.code || 'unavailable'}));
+  reply(res,error instanceof HttpError?error.status:503,{error:error instanceof HttpError || error.safe?error.message:'Verification is unavailable. Retry; no payment has been marked successful.'});
 }

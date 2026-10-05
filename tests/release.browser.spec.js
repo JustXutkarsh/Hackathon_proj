@@ -50,7 +50,7 @@ async function setup(context,index=undefined,control={}){
       await route.fulfill({json:data});}catch(error){await route.fulfill({status:403,json:{message:error.message,code:'42501'}});}
   });
   await context.route('**/api/release',async route=>{
-    if(route.request().method()==='GET')return route.fulfill({json:{configured:true,chain_id:10143}});
+    if(route.request().method()==='GET')return control.readinessError?route.fulfill({status:503,json:{error:control.readinessError}}):route.fulfill({json:{configured:true,chain_id:10143,contract_address:control.contractAddress || await contract.getAddress(),origin:control.origin || 'http://127.0.0.1:4174'}});
     const body=route.request().postDataJSON();let actor;try{actor=JSON.parse(Buffer.from(route.request().headers().authorization.split('.')[1],'base64url')).sub;}catch{}
     const user=actor?{id:actor}:null,methods={draft:'draft',challenge:'challenge',verify_wallet:'verifyWallet',receipt:'receipt',replacement:'replacement',refresh:'refresh'};
     try{if(!user&&body.action!=='refresh')throw Object.assign(Error('Your session expired.'),{status:401});const method=methods[body.action];const data=method==='refresh'?await service.refresh(body.token,user):await service[method](user,body);await route.fulfill({json:data});}
@@ -76,6 +76,24 @@ async function makePlan(title='Friday football'){
 }
 async function reviewReady(page){await expect(page.getByRole('button',{name:'Approve in wallet'})).toBeEnabled();}
 async function approve(page){await reviewReady(page);await page.getByLabel('I accept these rules and the immutable financial terms and recipient.').check();await page.getByRole('button',{name:'Approve in wallet'}).click();}
+
+test('New Plan opens before wallet/config readiness, preserves unfinished details and retries corrected configuration',async({page,context})=>{
+  const control={readinessError:'Shared database migration 002 or 003 is missing. Install the missing migrations in Hackathon_pj, then retry.'};
+  await setup(context,0,control);await page.goto('/');await expect(page.locator('#shared-status')).toContainText('migration 002 or 003');
+  await page.getByRole('button',{name:'New plan',exact:true}).click();await expect(page.getByRole('heading',{name:'Create a plan'})).toBeVisible();
+  await page.setViewportSize({width:375,height:812});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:'test-results/release-create-mobile.png',fullPage:true});
+  await page.getByLabel('Plan title').fill('Unfinished football');await page.getByLabel('Location',{exact:true}).fill('Local turf');await page.getByLabel('Short description').fill('Meet for football.');
+  await page.getByLabel('Participant slots').fill('2');await page.getByLabel('Recipient wallet').fill(accounts[3]);await page.getByRole('button',{name:'Save draft for review'}).click();
+  await expect(page.locator('#form-error')).toContainText('migration 002 or 003');expect(control.sends).toBe(0);await page.reload();
+  await page.getByRole('button',{name:'New plan',exact:true}).click();await expect(page.getByLabel('Plan title')).toHaveValue('Unfinished football');
+  control.readinessError=null;await page.getByRole('button',{name:'Save draft for review'}).click();await expect(page).toHaveURL(/\/plan\//);expect(control.sends).toBe(0);
+});
+test('configuration retry detects origin and browser/server contract mismatches without enabling payments',async({page,context})=>{
+  const control={origin:'https://another-origin.example'};await setup(context,0,control);await page.goto('/');await expect(page.locator('#shared-status')).toContainText('APP_ORIGIN');
+  control.origin='http://127.0.0.1:4174';control.contractAddress=accounts[4];await page.locator('#shared-status').getByRole('button',{name:'Retry'}).click();
+  await expect(page.locator('#shared-status')).toContainText('Browser and server escrow settings differ');expect(control.sends).toBe(0);
+  control.contractAddress=await contract.getAddress();await page.locator('#shared-status').getByRole('button',{name:'Retry'}).click();await expect(page.locator('#shared-status')).toBeEmpty();
+});
 
 test('anonymous invitation restores through auth, direct reload works, and removed demo routes stay unavailable',async({page,context})=>{
   const p=await makePlan();const log=await setup(context);await page.goto(`/plan/${p.token}`);await page.reload();

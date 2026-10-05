@@ -45,14 +45,14 @@ Node 22.9+, `npm ci`, ignored `.env` configured from `.env.example`, then `npm r
 
 ## Supabase Setup
 
-Active project: **Hackathon_pj**, reference **ednddqfwazggfsdaklwp**. The backend rejects another project URL. Read-only live checks found `preview_plan` and Email enabled, but **`my_wallets` is absent**. Hosted SMTP, actual email login and two-device participation remain unverified.
+Active project: **Hackathon_pj**, reference **ednddqfwazggfsdaklwp**. The backend rejects another project URL. Catalog inspection on October 5 found **001 and 002 installed**, including their matching funding columns, constraints, indexes, RPC bodies, private policies and grants. **003 is absent** (`release_admin`, wallet links and private receipts do not exist). Do not replay 001/002. Hosted two-account authentication and SMTP remain unverified.
 
 1. Inspect installation in this project's SQL Editor:
    ```sql
    select to_regprocedure('public.create_chain_plan(text,text,text,text,integer,timestamptz,timestamptz,text,text,text)') as migration_002,
           to_regprocedure('public.release_admin(text,jsonb)') as migration_003;
    ```
-2. Migration 001 was previously installed; **do not replay it**. If migration_002 is null, run `supabase/migrations/202610040002_monad_testnet.sql`. Then, if migration_003 is null, run `supabase/migrations/202610050003_verified_release.sql`. These are incremental, not a database reset. Reconcile CLI history before `supabase db push` if SQL was applied manually.
+2. For the inspected project, run **`supabase/repairs/20261005_verified_release.sql`** in SQL Editor, once. It is generated with `npm run prepare:db-repair` from canonical migrations 003/004, validates 002 prerequisites, leaves existing rows unchanged, skips already installed release objects, stops on partial/incompatible installation, and reloads the Data API schema. Every postflight field must be true. A real PostgreSQL test applies it twice and verifies old rows and financial fields survive unchanged. New installations apply 001, 002, 003, 004 in order instead. Reconcile CLI history before `supabase db push` if SQL was applied manually.
 3. Expose only the usual `public` Data API schema, never `countmein_private`. Set the project URL/publishable key and a **server-only** service-role key.
 4. Authentication > Providers: enable Email/signup, keep `{{ .ConfirmationURL }}` in the email template and configure custom SMTP for friends outside the default mailer's restrictions.
 5. Authentication > URL Configuration: Site URL `https://hackathonproj-beige.vercel.app`. Allow redirects `https://hackathonproj-beige.vercel.app/`, `https://hackathonproj-beige.vercel.app/plan/*`, `http://127.0.0.1:4173/`, `http://127.0.0.1:4173/plan/*`. Add the exact preview origin and its `/plan/*` pattern, and any different local port.
@@ -61,7 +61,7 @@ The implicit magic-link flow works without the initiating browser's PKCE verifie
 
 ## Contract Deployment
 
-**No public contract deployment or public testnet acceptance scenario was performed.** A funded deployer and verified escrow address are unavailable. Read-only RPC verification returned chain 10143. Never use local test fixture mnemonics on a public chain.
+**Public deployment independently verified by read-only RPC:** chain 10143, escrow `0x63e748D0b64DF798885348b0d036cA2E07A51059`, deployment block **68409889**, [successful deployment receipt](https://testnet.monadvision.com/tx/0xdba030ac46d56fa86a2e9c843a88daf74169305f7c919e8f83ed02b8b4f8cc10). Runtime exactly matches the pinned artifact; code is absent in the previous block and present in the creation block. The public manifest is `deployments/monad-testnet.json`. **No public deposit/payout/refund acceptance scenarios have been run.** Source verification is not yet confirmed. Never fund local fixture mnemonics publicly.
 
 1. Obtain test MON for a dedicated testnet wallet from the [official faucet](https://faucet.monad.xyz). [Official testnet settings](https://docs.monad.xyz/developer-essentials/testnet): chain 10143, RPC `https://testnet-rpc.monad.xyz`, explorer `https://testnet.monadscan.com`.
 2. Set `MONAD_DEPLOYER_PRIVATE_KEY` privately in a managed/local environment, run `npm run deploy:monad:testnet`, then unset it. Never paste a seed/private key into chat or add it to Vercel. A user-controlled wallet can alternatively deploy the exact artifact bytecode without constructor arguments.
@@ -73,7 +73,7 @@ The implicit magic-link flow works without the initiating browser's PKCE verifie
 
 Root `.`, framework Other, Node 22.x+, build `npm run build`, output **`build`**, not `dist`. The config packages Node APIs, sets 60-second function limits, privacy headers and invitation rewrites.
 
-Live checks found production still serves the **older shared bundle** and `/api/release` returns 404. A feature preview does not upgrade production, install SQL or deploy a contract. Do not merge automatically.
+Production currently serves release code from main merge `92a0034`; PR #3 was already merged externally on October 5. `/api/release` returns 503 at its database checkpoint, not a missing-contract/404 error. New fixes remain on `codex/monad-testnet-release`; no further merge is performed automatically. The Vercel output setting is corrected to `build`. Production-only settings were extended to Preview, with an exact release-branch `APP_ORIGIN`; redeployment is required to pick up changes. Deployment-specific random hostnames do not match that origin: use the configured stable branch alias for login and writes.
 
 Set these per Preview/Production environment and redeploy:
 
@@ -89,7 +89,7 @@ Set these per Preview/Production environment and redeploy:
 | `MONAD_TESTNET_RPC_URL` | Optional HTTPS RPC supporting finalized/history/logs |
 | `MONAD_TESTNET_EXPLORER_URL` | Optional trusted HTTPS explorer; default Monadscan |
 
-Public variables are bundled at build time; server secrets/signing keys are not. GET `/api/release` checks deployed runtime/configuration/database checkpoint; a 200 is **not** security or end-to-end acceptance. POST requires exact Origin and a verified session, except anonymous refresh of published invitations.
+Public variables are bundled at build time; server secrets/signing keys are not. GET `/api/release` checks deployed runtime, actual creation block and database checkpoint; a 200 is **not** security or end-to-end acceptance. Readiness failures appear in the creation dialog and Retry checks configuration again. Unfinished details may be retained explicitly in this account's browser tab, never counted as a shared/onchain plan. Shared saving still requires verified wallet ownership. POST requires exact Origin and a verified session, except anonymous refresh of published invitations. Migration 004 provides atomic, durable per-account request limits (60/minute; anonymous refresh 30/minute per observed IP), in addition to challenge cooldown/replay protection. Platform edge limits are still needed against distributed abuse. Logs contain operation/error codes, not request bodies, credentials or private account details.
 
 ## Reconciliation And Recovery
 
