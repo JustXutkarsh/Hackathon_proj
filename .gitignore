@@ -9,6 +9,7 @@ node_modules/
 coverage/
 dist/shared.bundle.js
 build/
+.browser-build/
 test-results/
 playwright-report/
 deployments/*.local.json

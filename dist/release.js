@@ -92,7 +92,8 @@ function detail(p) {
     if(c?.state===2&&c.deposit>0n)actions+=button('refund','Claim refund');
   }
   const share=p.chain_verified?'<button class="outline" data-action="copy">Copy invitation link</button>'+(navigator.share?'<button class="outline" data-action="share">Share invitation</button>':''):'';
-  return `<article class="shared-detail"><span class="badge">${esc(labels[p.state])}</span><h2>${esc(p.title)}</h2><p class="meta">${esc(p.activity)} &middot; ${esc(p.location)}</p><p>${esc(p.description)}</p><div class="detail-grid"><div><small>Funding progress</small><strong>${c?c.count:p.chain_verified?p.count:'—'} of ${p.target} wallets</strong></div><div><small>Your contribution</small><strong>${esc(formatMon(p.contribution_wei))} test MON</strong></div><div><small>Total required funding</small><strong>${esc(formatMon(BigInt(p.contribution_wei)*BigInt(p.target)))} test MON</strong></div><div><small>Funding deadline</small><strong>${esc(date(p.deadline))}</strong></div><div><small>Event time</small><strong>${esc(date(p.event_at))}</strong></div><div><small>Venue booking</small><strong>Not verified</strong></div></div><p>Recipient: <code class="wallet-address">${esc(p.recipient_wallet)}</code></p><p>Wallet: <code class="wallet-address">${esc(wallet?.address || 'Not connected')}</code>${wallet?`<br><small>Monad testnet &middot; ${esc(formatMon(wallet.balance))} test MON available</small>`:''}</p>${p.chainError?`<p class="error" role="alert">${esc(p.chainError)}</p>`:''}${c?.joined?`<p>${c.state===2&&c.deposit===0n?'Refund claimed and verified.':'Your wallet has a confirmed contribution.'}</p>`:''}${pending?`<p role="status">Submitted ${esc(pending.action)}. Confirmation pending. <a href="${esc(explorerTx(pending.hash))}" target="_blank" rel="noopener noreferrer">View transaction</a></p>`:''}<div class="actions">${actions}${share}<button class="outline" data-action="refresh">Refresh</button>${user&&(pending||p.is_owner&&!p.chain_plan_id)?button('recover','Check transaction'):''}</div><div class="notice">${rules}<p>Transactions, wallets, and funding terms are public onchain. The unlisted invitation does not make blockchain activity private. The description is stored offchain; avoid sensitive personal information.</p></div></article>`;
+  const balance=wallet?.balance==null?'Balance unavailable':`${esc(formatMon(wallet.balance))} test MON available`;
+  return `<article class="shared-detail"><span class="badge">${esc(labels[p.state])}</span><h2>${esc(p.title)}</h2><p class="meta">${esc(p.activity)} &middot; ${esc(p.location)}</p><p>${esc(p.description)}</p><div class="detail-grid"><div><small>Funding progress</small><strong>${c?c.count:p.chain_verified?p.count:'—'} of ${p.target} wallets</strong></div><div><small>Your contribution</small><strong>${esc(formatMon(p.contribution_wei))} test MON</strong></div><div><small>Total required funding</small><strong>${esc(formatMon(BigInt(p.contribution_wei)*BigInt(p.target)))} test MON</strong></div><div><small>Funding deadline</small><strong>${esc(date(p.deadline))}</strong></div><div><small>Event time</small><strong>${esc(date(p.event_at))}</strong></div><div><small>Venue booking</small><strong>Not verified</strong></div></div><p>Recipient: <code class="wallet-address">${esc(p.recipient_wallet)}</code></p><p>Wallet: <code class="wallet-address">${esc(wallet?.address || 'Not connected')}</code>${wallet?`<br><small>Monad testnet &middot; ${balance}</small>`:''}</p>${p.chainError?`<p class="error" role="alert">${esc(p.chainError)}</p>`:''}${c?.joined?`<p>${c.state===2&&c.deposit===0n?'Refund claimed and verified.':'Your wallet has a confirmed contribution.'}</p>`:''}${pending?`<p role="status">Submitted ${esc(pending.action)}. Confirmation pending. <a href="${esc(explorerTx(pending.hash))}" target="_blank" rel="noopener noreferrer">View transaction</a></p>`:''}<div class="actions">${actions}${share}<button class="outline" data-action="refresh">Refresh</button>${user&&(pending||p.is_owner&&!p.chain_plan_id)?button('recover','Check transaction'):''}</div><div class="notice">${rules}<p>Transactions, wallets, and funding terms are public onchain. The unlisted invitation does not make blockchain activity private. The description is stored offchain; avoid sensitive personal information.</p></div></article>`;
 }
 async function refresh(success='') {
   if(!client||!validPath)return;
@@ -102,6 +103,8 @@ async function refresh(success='') {
     const next=token?await rpc('preview_plan',{p_token:token}):user?await rpc('my_plans'):[];
     const loaded=token?(next?[next]:[]):next;
     const history=user?await rpc('my_receipts',{p_token:token||null}):[];
+    const connected=wallet;
+    if(connected){try{const balance=await connected.provider.getBalance(connected.address);if(wallet===connected)connected.balance=balance;}catch{if(wallet===connected)connected.balance=null;}}
     for(const p of loaded)if(p.chain_verified&&p.chain_plan_id&&ready){try{p.chain=await readEscrow(p,wallet?.address);p.state=p.chain.state===2?(p.chain.cancelled?'cancelled':'failed'):['open','funded','','paid'][p.chain.state];p.count=p.chain.count;}catch(e){p.chainError=readable(e);}}
     if(request!==revision)return;
     plans=loaded.filter(p=>p.payment_mode==='monad_testnet'&&p.chain_id===10143);receipts=history;render();status(success);
@@ -109,7 +112,8 @@ async function refresh(success='') {
 }
 async function connect() {
   if(!user)return account();
-  const generation=epoch,identity=user.id,w=await walletEscrow();
+  const identity=user.id,w=await walletEscrow(),generation=epoch;
+  if(user?.id!==identity)fail('Account changed. Connect again.');
   const linked=await rpc('my_wallets');
   if(!linked.some(item=>checksum(item.address)===w.address)){
     status('Approve the wallet ownership signature. This does not send tokens.');
@@ -119,7 +123,9 @@ async function connect() {
     await api('verify_wallet',{signature});
   }
   if(generation!==epoch||user?.id!==identity)fail('Wallet or account changed. Connect again.');
-  wallet={...w,verified:true,balance:await w.provider.getBalance(w.address)};
+  const balance=await w.provider.getBalance(w.address);
+  if(generation!==epoch||user?.id!==identity)fail('Wallet or account changed. Connect again.');
+  wallet={...w,verified:true,balance};
   await refresh('Wallet ownership verified. Monad testnet connected.');
 }
 async function prepare(p,action) {

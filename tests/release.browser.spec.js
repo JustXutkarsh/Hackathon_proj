@@ -9,7 +9,7 @@ import ganache from 'ganache';
 import { BrowserProvider,ContractFactory,Wallet,keccak256,getBytes } from 'ethers';
 import { compileContract } from '../scripts/compile-contract.mjs';
 import { ReleaseService } from '../server/release.mjs';
-import { transactionFor } from '../dist/chain.js';
+import { transactionFor,formatMon } from '../dist/chain.js';
 
 const ids=['00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000003'];
 let database,db,dbConfig,directory,chain,provider,contract,service,accounts;
@@ -94,6 +94,7 @@ test('two accounts publish, recover after database outage, deposit and collect w
     await expect(a.getByRole('button',{name:'Copy invitation link'})).toHaveCount(0);await a.getByRole('button',{name:'Connect wallet',exact:true}).click();await a.getByRole('button',{name:'Review and publish escrow'}).click();
     await reviewReady(a);const before=await contract.nextId();state.failRecord=true;await approve(a);await expect(a.getByRole('status').filter({hasText:'Submitted create.'})).toBeVisible();
     expect(await a.evaluate(()=>Object.keys(JSON.parse(localStorage.getItem('countmein-pending-v2'))).length)).toBe(1);expect(await contract.nextId()).toBe(before+1n);
+    await expect(a.getByRole('status').filter({hasText:'Database synchronization failed.'})).toBeVisible();
     state.failRecord=false;await a.reload();await expect(a.getByRole('button',{name:'Copy invitation link'})).toBeVisible();await a.getByRole('button',{name:'Check transaction'}).click();await a.getByRole('button',{name:'Verify receipt'}).click();
     expect(await contract.nextId()).toBe(before+1n);await a.getByRole('button',{name:'Copy invitation link'}).click();const link=await a.evaluate(()=>navigator.clipboard.readText());
     await a.getByRole('button',{name:'Connect wallet',exact:true}).click();await a.getByRole('button',{name:'Review contribution'}).click();await approve(a);await expect(a.getByText('1 of 2 wallets',{exact:true})).toBeVisible();
@@ -101,6 +102,7 @@ test('two accounts publish, recover after database outage, deposit and collect w
     await a.getByRole('button',{name:'Refresh',exact:true}).click();await expect(a.getByText('2 of 2 wallets',{exact:true})).toBeVisible();await expect(a.getByText('Not verified',{exact:true})).toBeVisible();
     const balance=await provider.getBalance(accounts[3]);await a.getByRole('button',{name:'Collect funds',exact:true}).click();await approve(a);await expect(a.locator('#plan-grid').getByText('Funds collected',{exact:true})).toBeVisible();expect((await provider.getBalance(accounts[3]))-balance).toBe(20000000000000000n);
     await expect(a.locator('#receipt-list')).toContainText('Collected');await a.screenshot({path:'test-results/release-paid-desktop.png',fullPage:true});
+    await expect(a.locator('.shared-detail')).toContainText(formatMon(await provider.getBalance(accounts[0]))+' test MON available');
   }finally{state.failRecord=false;await ca.close();await cb.close();}
 });
 test('cancellation enables one verified depositor refund and updates its receipt dashboard',async({browser})=>{
@@ -109,6 +111,7 @@ test('cancellation enables one verified depositor refund and updates its receipt
     await a.goto(`/plan/${p.token}`);await a.getByRole('button',{name:'Connect wallet',exact:true}).click();await a.getByRole('button',{name:'Cancel plan',exact:true}).click();await approve(a);await expect(a.getByText('Cancelled - refunds available',{exact:true})).toBeVisible();
     await b.getByRole('button',{name:'Refresh',exact:true}).click();await b.getByRole('button',{name:'Claim refund',exact:true}).click();await approve(b);await expect(b.getByText('Refund claimed and verified.',{exact:true}).first()).toBeVisible();await expect(b.getByRole('button',{name:'Claim refund',exact:true})).toHaveCount(0);await expect(b.locator('#receipt-list')).toContainText('Refunded');
     expect(await contract.deposits(p.chain_plan_id,accounts[1])).toBe(0n);
+    await expect(b.locator('.shared-detail')).toContainText(formatMon(await provider.getBalance(accounts[1]))+' test MON available');
   }finally{await ca.close();await cb.close();}
 });
 test('wallet and network changes invalidate a prepared payment before broadcast',async({page,context})=>{
