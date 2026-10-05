@@ -28,6 +28,7 @@ before(async () => {
     grant execute on function auth.uid() to anon, authenticated;`);
   for (const id of ids) await admin.query('insert into auth.users values($1,$2)',[id,id+'@private.example']);
   await admin.query(await readFile(new URL('../supabase/migrations/202610040001_shared_plans.sql',import.meta.url),'utf8'));
+  await admin.query(await readFile(new URL('../supabase/migrations/202610040002_monad_testnet.sql',import.meta.url),'utf8'));
 });
 after(async () => { await admin?.end(); if (cluster) await cluster.stop(); if (directory) await rm(directory,{recursive:true,force:true}); });
 async function session(id, fn) {
@@ -56,7 +57,7 @@ test('creation derives owner from auth and does not join; constraints are enforc
 test('anonymous preview exposes no emails, user IDs, or directory; direct access and mutations fail', async () => {
   const token = await create(); await act(ids[1],token,'join');
   const p = await preview(null,token);
-  assert.deepEqual(Object.keys(p).sort(),['token','title','activity','location','amount','target','deadline','event_at','state','count','is_owner','joined','refunded'].sort());
+  assert.deepEqual(Object.keys(p).sort(),['token','title','activity','location','amount','target','deadline','event_at','state','count','is_owner','joined','refunded','payment_mode','contribution_wei','recipient_wallet','organizer_wallet','escrow_address','chain_plan_id','chain_create_tx'].sort());
   assert.equal(p.count,1); assert.equal(p.joined,false); assert.equal(p.is_owner,false);
   assert.equal(await preview(null,ids[3]),null);
   for (const id of [null,ids[3]]) {
@@ -68,7 +69,7 @@ test('anonymous preview exposes no emails, user IDs, or directory; direct access
   await assert.rejects(call(null,'select public.my_plans()'),/permission denied/);
   assert.deepEqual(await call(ids[3],'select public.my_plans() as value'),[]);
   const policies = await admin.query("select count(*)::int as n from pg_policies where schemaname='countmein_private' and permissive='RESTRICTIVE'");
-  assert.equal(policies.rows[0].n,2);
+  assert.equal(policies.rows[0].n,3);
   // Defense in depth: policies still block reads if schema/table grants drift.
   await admin.query('grant usage on schema countmein_private to authenticated; grant select on all tables in schema countmein_private to authenticated');
   try { await session(ids[1],async c => assert.equal((await c.query('select * from countmein_private.participations')).rowCount,0)); }
@@ -144,4 +145,33 @@ test('an authenticated role without a user claim cannot create, list or mutate',
     await assert.rejects(c.query('select public.act_on_plan($1,$2)',[token,'join']),/session expired/);
     await assert.rejects(c.query("select public.create_plan('x','sport','x',1,2,now()+interval '1 hour',now()+interval '2 hours')"),/Sign in/);
   });
+});
+
+const wallet = '0x1111111111111111111111111111111111111111';
+const escrow = '0x2222222222222222222222222222222222222222';
+const chainCreate = (id=ids[0], amount='10000000000000000', recipient=wallet) => call(id,
+  "select public.create_chain_plan('Test football','sport','Turf',$1,2,date_trunc('second',now()+interval '1 hour'),date_trunc('second',now()+interval '2 hours'),$2,$3,$4) as value",
+  [amount,recipient,wallet,escrow]);
+const attach = (id,token,number='0',hash='0x'+'a'.repeat(64)) => call(id,'select public.attach_chain_plan($1,$2,$3) as value',[token,number,hash]);
+test('testnet drafts enforce terms and ownership; references never count as deposits', async () => {
+  await assert.rejects(chainCreate(null),/permission denied/);
+  for (const amount of [null,'0','-1','1.5','79228162514264337593543950336']) await assert.rejects(chainCreate(ids[0],amount));
+  for (const recipient of [null,'0x'+'0'.repeat(40),'not-a-wallet']) await assert.rejects(chainCreate(ids[0],'1',recipient));
+  const token = await chainCreate(), draft = await preview(null,token);
+  assert.equal(draft.state,'awaiting_contract'); assert.equal(draft.count,null); assert.equal(draft.joined,false);
+  for (const action of ['join','cancel','refund']) await assert.rejects(act(ids[0],token,action),/Use the Monad escrow/);
+  await assert.rejects(attach(null,token),/permission denied/);
+  await assert.rejects(attach(ids[1],token),/Only the organizer/);
+  for (const [id,hash] of [[null,'0x'+'a'.repeat(64)],['0',null],['-1','0x'+'a'.repeat(64)],[(2n**256n).toString(),'0x'+'a'.repeat(64)]]) await assert.rejects(attach(ids[0],token,id,hash));
+  await attach(ids[0],token); await attach(ids[0],token);
+  await assert.rejects(attach(ids[0],token,'1'),/cannot be attached/);
+  await assert.rejects(attach(ids[0],await chainCreate()),/unique constraint/);
+  await assert.rejects(call(null,'select public.remember_chain_plan($1)',[token]),/permission denied/);
+  await call(ids[1],'select public.remember_chain_plan($1)',[token]);
+  await call(ids[1],'select public.remember_chain_plan($1)',[token]);
+  const bookmarked = (await call(ids[1],'select public.my_plans() as value')).find(p=>p.token===token);
+  assert.equal(bookmarked.count,null); assert.equal(bookmarked.joined,false); assert.equal(bookmarked.refunded,false);
+  assert.equal((await preview(null,token)).state,'chain');
+  assert.equal((await call(ids[2],'select public.my_plans() as value')).some(p=>p.token===token),false);
+  await assert.rejects(call(ids[1],'select * from countmein_private.chain_bookmarks'),/permission denied/);
 });
