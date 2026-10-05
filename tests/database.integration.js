@@ -49,6 +49,35 @@ const create = (id=ids[0]) => call(id, "select public.create_plan('Friday footba
 const act = (id,token,action) => call(id,'select public.act_on_plan($1,$2) as value',[token,action]);
 const preview = (id,token) => call(id,'select public.preview_plan($1) as value',[token]);
 
+test('live-schema repair installs only missing release objects, preserves rows and is repeatable',async()=>{
+  await admin.query('create database repair_check');const c=new pg.Client({...config,database:'repair_check'});await c.connect();
+  try {
+    await c.query(`create schema auth;create table auth.users(id uuid primary key,email text);create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;insert into auth.users values('${ids[0]}','private@example.test');`);
+    for(const name of ['202610040001_shared_plans.sql','202610040002_monad_testnet.sql'])await c.query(await readFile(new URL('../supabase/migrations/'+name,import.meta.url),'utf8'));
+    await c.query("insert into countmein_private.plans(owner_id,title,activity,location,amount,target,deadline,event_at) values($1,'Existing plan','sport','Existing location',50,6,now()+interval '1 hour',now()+interval '2 hours')",[ids[0]]);
+    const before=(await c.query('select to_jsonb(p) as value from countmein_private.plans p')).rows[0].value;
+    const repair=await readFile(new URL('../supabase/repairs/20261005_verified_release.sql',import.meta.url),'utf8');
+    await c.query(repair);await c.query(repair);
+    const after=(await c.query('select to_jsonb(p) as value from countmein_private.plans p')).rows[0].value;
+    for(const [key,value] of Object.entries(before))assert.deepEqual(after[key],value);
+    assert.equal(after.release_version,1);assert.equal(after.chain_verified,false);
+    const checks=(await c.query("select has_function_privilege('authenticated','public.release_admin(text,jsonb)','execute') as client,has_function_privilege('service_role','public.release_admin(text,jsonb)','execute') as server")).rows[0];assert.deepEqual(checks,{client:false,server:true});
+    const count=(await c.query('select count(*)::int as n from countmein_private.plans')).rows[0].n;assert.equal(count,1);
+  }finally{await c.end();await admin.query('drop database repair_check');}
+});
+
+test('durable request limits serialize concurrent callers and deny browser access',async()=>{
+  await admin.query(await readFile(new URL('../supabase/migrations/202610050004_request_limits.sql',import.meta.url),'utf8'));
+  for(const id of [null,ids[0]]) {
+    await assert.rejects(call(id,"select public.release_request_limit('forged',120)"),/permission denied/);
+    await assert.rejects(call(id,'select * from countmein_private.request_limits'),/permission denied/);
+  }
+  const clients=await Promise.all(Array.from({length:8},async()=>{const c=new pg.Client(config);await c.connect();return c;}));
+  try{const results=await Promise.all(clients.map(c=>c.query("select public.release_request_limit('concurrent',3) as allowed")));assert.equal(results.filter(r=>r.rows[0].allowed).length,3);}finally{await Promise.all(clients.map(c=>c.end()));}
+  await admin.query("update countmein_private.request_limits set started_at=clock_timestamp()-interval '61 seconds' where bucket='concurrent'");
+  assert.equal((await admin.query("select public.release_request_limit('concurrent',3) as allowed")).rows[0].allowed,true);
+});
+
 test('creation derives owner from auth and does not join; constraints are enforced', async () => {
   const token = await create(); const p = await preview(ids[0],token);
   assert.equal(p.count,0); assert.equal(p.joined,false); assert.equal(p.is_owner,true);
@@ -74,7 +103,7 @@ test('anonymous preview exposes no emails, user IDs, or directory; direct access
   await assert.rejects(call(null,'select public.my_plans()'),/permission denied/);
   assert.deepEqual(await call(ids[3],'select public.my_plans() as value'),[]);
   const policies = await admin.query("select count(*)::int as n from pg_policies where schemaname='countmein_private' and permissive='RESTRICTIVE'");
-  assert.equal(policies.rows[0].n,3);
+  assert.equal(policies.rows[0].n,4);
   // Defense in depth: policies still block reads if schema/table grants drift.
   await admin.query('grant usage on schema countmein_private to authenticated; grant select on all tables in schema countmein_private to authenticated');
   try { await session(ids[1],async c => assert.equal((await c.query('select * from countmein_private.participations')).rowCount,0)); }

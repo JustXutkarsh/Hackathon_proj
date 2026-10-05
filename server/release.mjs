@@ -204,8 +204,15 @@ export class ReleaseService {
     }
     return cursor;
   }
-  async reconcile({pages=4}={}) {
+  async verifyDeployment() {
     await verifyProvider(this.provider,this.config);
+    const block=this.config.deploymentBlock,finalized=await this.provider.getBlock('finalized');
+    if(!Number.isSafeInteger(block)||block<=0||!finalized||block>finalized.number)throw new HttpError(503,'The configured deployment block is invalid or not finalized. Check MONAD_TESTNET_DEPLOYMENT_BLOCK.');
+    const at=await this.provider.getCode(this.config.contractAddress,block),before=await this.provider.getCode(this.config.contractAddress,block-1);
+    if(at==='0x'||before!=='0x')throw new HttpError(503,'The deployment block does not identify this escrow creation. Use the block from its verified deployment receipt.');
+  }
+  async reconcile({pages=4}={}) {
+    await this.verifyDeployment();
     let cursor=await this.checkCursor(), processed=0;
     const finalized=await this.provider.getBlock('finalized');
     for (let page=0;page<pages && Number(cursor.block_number)<finalized.number;page++) {

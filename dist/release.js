@@ -8,7 +8,7 @@ const token=location.pathname.match(/^\/plan\/([0-9a-f-]{36})\/?$/i)?.[1];
 const validPath=location.pathname==='/' || Boolean(token),callback=new URLSearchParams(location.hash.slice(1));
 const labels={draft:'Draft',open:'Open for funding',funded:'Funding confirmed',paid:'Funds collected',cancelled:'Cancelled - refunds available',failed:'Deadline missed - refunds available'};
 const storageKey='countmein-pending-v2';
-let client,user=null,plans=[],receipts=[],wallet=null,filter='all',busy=false,epoch=0,revision=0,ready=false,transactions={};
+let client,user=null,plans=[],receipts=[],wallet=null,filter='all',busy=false,epoch=0,revision=0,ready=false,transactions={},readinessError='Checking testnet service configuration...';
 try { transactions=JSON.parse(localStorage.getItem(storageKey)) || {}; } catch {}
 const rules='<p>Each wallet can commit one contribution. Contributions stay in escrow while open. Full funding before the deadline lets the fixed recipient collect. Cancellation or a missed target lets each depositor claim a refund.</p><p>Funding does not guarantee attendance, a venue booking, or service delivery. After full funding the organizer cannot cancel or open refunds. After collection the contract cannot recover funds from the recipient. Venue disputes and voluntary repayments are outside these rules.</p><p>Network fees are separate and are not refunded. No platform fees or yield. Wallet addresses do not prove unique people. Keep access to your wallet to claim your onchain rights.</p>';
 document.body.classList.add('shared','release');
@@ -38,7 +38,20 @@ function modal(html) {
   if(!$('#modal').open)$('#modal').showModal();
 }
 function disablePending(root=document){if(busy)root.querySelectorAll('button,fieldset').forEach(el=>{if(!el.disabled){el.disabled=true;el.dataset.busy='true';}});}
-function status(text,retry=false) { $('#shared-status').textContent=text; if(retry){const b=document.createElement('button');b.className='outline';b.textContent='Retry';b.onclick=()=>refresh();$('#shared-status').append(b);} }
+function status(text,retry=false) { $('#shared-status').textContent=text; if(retry){const b=document.createElement('button');b.className='outline';b.textContent='Retry';b.onclick=()=>run(async()=>{await checkReadiness();await refresh();});$('#shared-status').append(b);} }
+async function checkReadiness() {
+  ready=false;
+  try {
+    const r=await fetch('/api/release',{signal:AbortSignal.timeout(15000),cache:'no-store'}),result=await r.json();
+    if(!r.ok)throw Object.assign(Error(result.error || 'Testnet service is unavailable. Retry or contact the organizer.'),{safe:true});
+    if(!MONAD_TESTNET.contractAddress)fail('The browser build is missing MONAD_TESTNET_ESCROW_ADDRESS. Set it for this deployment environment and redeploy.');
+    if(result.contract_address && checksum(result.contract_address)!==checksum(MONAD_TESTNET.contractAddress))fail('Browser and server escrow settings differ. Redeploy with matching contract configuration.');
+    if(result.origin && result.origin!==location.origin)fail('APP_ORIGIN does not match this website. Configure the exact deployment origin and its Supabase authentication redirects.');
+    if(!result.configured || result.chain_id!==10143)fail('The service has not verified Monad testnet configuration. Transactions remain disabled.');
+    ready=true;readinessError='';
+  }catch(e){readinessError=readable(e);}
+  return ready;
+}
 function readable(e) {
   if(e?.code==='ACTION_REJECTED'||e?.code===4001)return 'Wallet request rejected. No payment was confirmed.';
   if(e?.code==='INSUFFICIENT_FUNDS')return 'Not enough test MON for the contribution and network fee.';
@@ -60,7 +73,9 @@ async function run(fn) {
   if(busy)return;busy=true;
   disablePending();
   if($('#form-error'))$('#form-error').textContent='';
-  try{await fn();}catch(e){const text=readable(e);if($('#modal').open)$('#form-error').textContent=text;else status(text,true);}
+  try{await fn();}catch(e){const text=readable(e);if($('#modal').open)$('#form-error').textContent=text;else status(text,true);
+    if(e?.status===401){user=null;wallet=null;epoch++;render();const button=document.createElement('button');button.className='outline';button.textContent='Sign in again';button.onclick=account;($('#modal').open?$('#form-error'):$('#shared-status')).append(button);}
+  }
   finally{busy=false;document.querySelectorAll('[data-busy]').forEach(el=>{el.disabled=false;delete el.dataset.busy;});}
 }
 function savePending(value) {if(value)transactions[token]=value;else delete transactions[token];localStorage.setItem(storageKey,JSON.stringify(transactions));}
@@ -107,11 +122,12 @@ async function refresh(success='') {
     if(connected){try{const balance=await connected.provider.getBalance(connected.address);if(wallet===connected)connected.balance=balance;}catch{if(wallet===connected)connected.balance=null;}}
     for(const p of loaded)if(p.chain_verified&&p.chain_plan_id&&ready){try{p.chain=await readEscrow(p,wallet?.address);p.state=p.chain.state===2?(p.chain.cancelled?'cancelled':'failed'):['open','funded','','paid'][p.chain.state];p.count=p.chain.count;}catch(e){p.chainError=readable(e);}}
     if(request!==revision)return;
-    plans=loaded.filter(p=>p.payment_mode==='monad_testnet'&&p.chain_id===10143);receipts=history;render();status(success);
-  }catch(e){if(request===revision)status(readable(e),true);}finally{if(request===revision)$('#plan-grid').removeAttribute('aria-busy');}
+    plans=loaded.filter(p=>p.payment_mode==='monad_testnet'&&p.chain_id===10143);receipts=history;render();status(success || readinessError,!ready);
+  }catch(e){if(request===revision)status(readinessError || readable(e),true);}finally{if(request===revision)$('#plan-grid').removeAttribute('aria-busy');}
 }
 async function connect() {
   if(!user)return account();
+  if(!ready && !await checkReadiness())fail(readinessError);
   const identity=user.id,w=await walletEscrow(),generation=epoch;
   if(user?.id!==identity)fail('Account changed. Connect again.');
   const linked=await rpc('my_wallets');
@@ -129,6 +145,7 @@ async function connect() {
   await refresh('Wallet ownership verified. Monad testnet connected.');
 }
 async function prepare(p,action) {
+  if(!await checkReadiness())fail(readinessError);
   if(!wallet?.verified)fail('Connect and verify your wallet first.');
   const generation=epoch,identity=user.id,w=await walletEscrow();
   if(w.address!==wallet.address)fail('Wallet changed. Reconnect and verify it.');
@@ -150,7 +167,7 @@ async function prepare(p,action) {
   if(balance<cost+request.value)fail('Not enough test MON for this contribution and its network fee.');
   if(generation!==epoch||identity!==user?.id)fail('Wallet or account changed. Prepare the transaction again.');
   const names={create:'Publish escrow',join:'Commit contribution',cancel:'Cancel and open refunds',collect:'Collect funds',refund:'Claim refund'};
-  modal(`<h2>${esc(names[action])}</h2><p>${esc(p.title)}</p><p>Your contribution: <strong>${esc(formatMon(p.contribution_wei))} test MON</strong><br>Total required: <strong>${esc(formatMon(BigInt(p.contribution_wei)*BigInt(p.target)))} test MON</strong><br>Funding deadline: ${esc(date(p.deadline))}</p><p>Recipient: <code class="wallet-address">${esc(p.recipient_wallet)}</code></p><p>Estimated maximum network fee: <strong>${esc(formatMon(cost))} test MON</strong></p>${rules}<label class="check-label"><input type="checkbox" id="acknowledge"> I accept these rules and the immutable financial terms and recipient.</label><button class="primary full" id="approve-transaction">Approve in wallet</button>`);
+  modal(`<h2>${esc(names[action])}</h2><p>${esc(p.title)}</p><p>Monad testnet &middot; ${p.target} funded wallet slots<br>Your contribution: <strong>${esc(formatMon(p.contribution_wei))} test MON</strong><br>Total required: <strong>${esc(formatMon(BigInt(p.contribution_wei)*BigInt(p.target)))} test MON</strong><br>Funding deadline: ${esc(date(p.deadline))} (${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)})</p><p>Recipient: <code class="wallet-address">${esc(p.recipient_wallet)}</code></p><p>Estimated maximum network fee: <strong>${esc(formatMon(cost))} test MON</strong></p><p>This submits an onchain transaction. Publication permanently fixes the recipient and financial terms. It does not deposit the organizer's contribution.</p>${rules}<label class="check-label"><input type="checkbox" id="acknowledge"> I accept these rules and the immutable financial terms and recipient.</label><button class="primary full" id="approve-transaction">Approve in wallet</button>`);
   $('#approve-transaction').onclick=()=>run(async()=>{
     if(!$('#acknowledge').checked)fail('Acknowledge the funding rules before continuing.');
     if(generation!==epoch||identity!==user?.id)fail('Wallet or account changed. Prepare the transaction again.');
@@ -180,15 +197,33 @@ $('#plan-grid').onclick=e=>{
   return run(()=>prepare(plans[0],action));
 };
 function create() {
-  if(!user)return account();if(!ready)return status('Testnet deposits require deployment configuration.',true);
-  if(!wallet?.verified)return run(async()=>{await connect();if(wallet?.verified)create();});
+  if(!user)return account();
   modal(`<h2>Create a plan</h2><form id="create-form"><fieldset><label for="title">Plan title</label><input id="title" name="title" maxlength="70" required><div class="row"><div><label for="activity">Activity</label><select id="activity" name="activity"><option value="sport">Sports</option><option value="outing">Outing</option><option value="social">Get-together</option></select></div><div><label for="location">Location</label><input id="location" name="location" maxlength="90" required></div></div><label for="description">Short description</label><textarea id="description" name="description" maxlength="500" rows="3" required></textarea><div class="row"><div><label for="contribution">Contribution in test MON</label><input id="contribution" name="contribution" inputmode="decimal" value="0.01" required></div><div><label for="target">Participant slots</label><input id="target" name="target" type="number" min="2" max="50" step="1" value="6" required></div></div><p>Total required funding: <strong id="funding-total">0.06 test MON</strong></p><label for="deadline">Funding deadline</label><input id="deadline" name="deadline" type="datetime-local" value="${inputDate(Date.now()+86400000)}" required><label for="event_at">Event time</label><input id="event_at" name="event_at" type="datetime-local" value="${inputDate(Date.now()+172800000)}" required><label for="recipient_wallet">Recipient wallet</label><input id="recipient_wallet" name="recipient_wallet" placeholder="0x..." spellcheck="false" required><p>Financial terms and recipient cannot change after publication. Creating a plan does not deposit your contribution.</p><button class="primary full">Save draft for review</button></fieldset></form>`);
+  const draftKey=`countmein-unfinished-v2:${user.id}`;
+  try{const saved=JSON.parse(sessionStorage.getItem(draftKey));if(saved)for(const [name,value] of Object.entries(saved)){const field=$('#create-form').elements.namedItem(name);if(field)field.value=value;}}catch{}
+  $('#create-form').insertAdjacentHTML('afterbegin',`<p>Times use ${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)}. Saving to the shared database requires wallet ownership verification (a signature, not a payment). Saved drafts are fixed for review; create another draft to change terms. Publication makes them immutable onchain.</p><p id="creation-readiness" class="error" role="status">${esc(readinessError)}</p>`);
+  $('#create-form').insertAdjacentHTML('beforeend','<button type="button" class="outline full" id="save-unfinished">Keep unfinished details on this device</button><p id="unfinished-status" role="status"></p>');
+  const saveUnfinished=()=>sessionStorage.setItem(draftKey,JSON.stringify(Object.fromEntries(new FormData($('#create-form')))));
+  $('#create-form').oninput=saveUnfinished;
+  $('#save-unfinished').onclick=()=>{saveUnfinished();$('#unfinished-status').textContent='Unfinished details kept for this account in this browser tab. Not shared or published onchain.';};
   const total=()=>{try{const n=Number($('#target').value);$('#funding-total').textContent=Number.isInteger(n)&&n>=2&&n<=50?formatMon(parseMon($('#contribution').value)*BigInt(n))+' test MON':'—';}catch{$('#funding-total').textContent='Enter a valid contribution';}};
+  total();
   $('#target').oninput=$('#contribution').oninput=total;
-  $('#create-form').onsubmit=e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.target));run(async()=>{const generation=epoch;f.target=Number(f.target);f.deadline=new Date(f.deadline).toISOString();f.event_at=new Date(f.event_at).toISOString();f.address=wallet.address;parseMon(f.contribution);if(!validWallet(f.recipient_wallet))fail('Enter a valid nonzero recipient wallet.');if(generation!==epoch)fail('Wallet changed. Reconnect.');const p=await api('draft',f);location.assign(`/plan/${p.token}`);});};
+  $('#create-form').onsubmit=e=>{e.preventDefault();saveUnfinished();const f=Object.fromEntries(new FormData(e.target)),identity=user.id;run(async()=>{
+    f.target=Number(f.target);f.deadline=new Date(f.deadline).toISOString();f.event_at=new Date(f.event_at).toISOString();parseMon(f.contribution);
+    if(!validWallet(f.recipient_wallet))fail('Enter a valid nonzero recipient wallet.');
+    if(!Number.isInteger(f.target)||f.target<2||f.target>50)fail('Choose 2 to 50 participant slots.');
+    if(Date.parse(f.deadline)<=Date.now()||Date.parse(f.event_at)<=Date.parse(f.deadline))fail('Choose a future funding deadline and a later event time.');
+    if(!await checkReadiness())fail(readinessError);
+    if(!wallet?.verified)await connect();
+    if(user?.id!==identity||!wallet?.verified)fail('Account or wallet changed. Review your draft again.');
+    f.address=wallet.address;const generation=epoch,p=await api('draft',f);
+    if(generation!==epoch||user?.id!==identity)fail('Draft saved for the original organizer. Reconnect before publishing it.');
+    sessionStorage.removeItem(draftKey);location.assign(`/plan/${p.token}`);
+  });};
 }
 function account() {
-  if(!client)return status('Authentication requires configuration.');
+  if(!client)return modal('<h2>Sign-in unavailable</h2><p>Set the public Supabase project URL and publishable key for this deployment, then redeploy. No payment can be submitted.</p>');
   if(!user){modal('<h2>Sign in to CountMeIn</h2><p>Your invitation will be preserved in the email sign-in link.</p><form id="auth-form"><fieldset><label for="email">Email</label><input id="email" type="email" maxlength="254" autocomplete="email" required><label for="display-name">Display name</label><input id="display-name" maxlength="30" autocomplete="nickname" required><button class="primary full">Email sign-in link</button></fieldset></form>');
     $('#auth-form').onsubmit=e=>{e.preventDefault();run(async()=>{const name=$('#display-name').value.trim();if(!name)fail('Enter a display name.');const {error}=await client.auth.signInWithOtp({email:$('#email').value.trim(),options:{emailRedirectTo:location.origin+(token?`/plan/${token}`:'/'),data:{display_name:name}}});if(error)throw error;$('#modal').close();status('Check your email. The sign-in link returns to your invitation.');});};
   }else{modal(`<h2>Your account</h2><form id="profile-form"><fieldset><label for="display-name">Display name</label><input id="display-name" maxlength="30" value="${esc(user.user_metadata?.display_name || '')}" required><button class="primary full">Save name</button></fieldset></form><button id="signout" class="outline full">Sign out</button>`);
@@ -205,10 +240,10 @@ else{
   client=createClient(__SUPABASE_URL__,__SUPABASE_KEY__,{auth:{flowType:'implicit',persistSession:true,autoRefreshToken:true,detectSessionInUrl:true},global:{fetch:(input,init={})=>fetch(input,{...init,signal:init.signal?AbortSignal.any([init.signal,AbortSignal.timeout(15000)]):AbortSignal.timeout(15000)})}});
   const {data,error}=await client.auth.getSession();user=data.session?.user || null;
   if(callback.has('access_token')||callback.has('error_description'))history.replaceState(null,'',location.pathname);
-  try{const r=await fetch('/api/release',{signal:AbortSignal.timeout(10000)});ready=r.ok&&MONAD_TESTNET.contractAddress!=='';}catch{}
+  await checkReadiness();
   render();await refresh();
-  if(!ready)status('Testnet deposits require deployment configuration. Sign-in is available.');
+  if(!ready)status(readinessError,true);
   if(error||callback.has('error_description'))status('Sign-in link expired or could not be verified. Request a new sign-in link.');
   client.auth.onAuthStateChange((event,session)=>{const old=user?.id;user=session?.user || null;if(old!==user?.id){wallet=null;epoch++;plans=[];receipts=[];render();setTimeout(()=>refresh(event==='SIGNED_OUT'?'Signed out.':''),0);}});
-  const resume=()=>{if(!document.hidden&&!busy)refresh();};window.addEventListener('focus',resume);document.addEventListener('visibilitychange',resume);setInterval(resume,30000);
+  const resume=()=>{if(!document.hidden&&!busy)run(async()=>{if(!ready)await checkReadiness();await refresh();});};window.addEventListener('focus',resume);document.addEventListener('visibilitychange',resume);setInterval(resume,30000);
 }

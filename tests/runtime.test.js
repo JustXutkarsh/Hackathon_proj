@@ -7,6 +7,15 @@ import { handle } from '../api/release.js';
 
 const user={id:'00000000-0000-4000-8000-000000000001'},origin='https://countmein.example';
 function response(){return {headers:{},setHeader(k,v){this.headers[k]=v;},end(body){this.body=JSON.parse(body);}};}
+test('readiness never succeeds with an incorrect deployment block or missing database setup',async()=>{
+  const config={chainId:10143,contractAddress:'0x'+'1'.repeat(40),runtimeHash:keccak256('0x1234'),deploymentBlock:10};
+  const provider={send:async()=> '0x279f',getBlock:async()=>({number:20}),getCode:async(_,block)=>block===9?'0x':'0x1234'};
+  const service=new ReleaseService({config,provider,origin,admin:async()=>{throw new HttpError(503,'Shared database migration 002 or 003 is missing.');}});
+  const r=response();await handle({method:'GET',headers:{}},r,{service,origin});assert.equal(r.statusCode,503);assert.match(r.body.error,/migration/);
+  config.deploymentBlock=11;await assert.rejects(service.verifyDeployment(),/deployment block does not identify/);
+  config.deploymentBlock=21;await assert.rejects(service.verifyDeployment(),/invalid or not finalized/);
+  config.deploymentBlock=10;provider.getCode=async()=> '0x5678';await assert.rejects(service.verifyDeployment(),/bytecode/);
+});
 test('API requires trusted authentication and exact origin, ignores client identity and hides internal errors',async()=>{
   const calls=[],runtime={origin,auth:{auth:{getUser:async token=>token==='valid'?{data:{user}}:{data:{user:null},error:true}}},service:{
     draft:async(actor,body)=>{calls.push({actor,body});return {owner:actor.id};},refresh:async()=>({status:'synchronized'})}};
@@ -18,6 +27,7 @@ test('API requires trusted authentication and exact origin, ignores client ident
   }
   let res=response();await handle(request({action:'draft',user_id:'attacker'}),res,runtime);assert.equal(res.body.owner,user.id);assert.equal(calls.length,1);
   res=response();await handle(request({action:'refresh'},{authorization:''}),res,runtime);assert.equal(res.statusCode,200);
+  runtime.rateLimit=async()=>{throw new HttpError(429,'Too many requests.');};res=response();await handle(request({action:'draft'}),res,runtime);assert.equal(res.statusCode,429);assert.equal(calls.length,1);delete runtime.rateLimit;
   runtime.service.draft=async()=>{throw Error('password=secret; SQL private_table');};res=response();await handle(request({action:'draft'}),res,runtime);
   assert.equal(res.statusCode,503);assert.doesNotMatch(JSON.stringify(res.body),/password|SQL|private_table/);
 });

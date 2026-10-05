@@ -14,6 +14,7 @@
     "test:chain": "node --test tests/chain.integration.js",
     "test:security": "node --test tests/contract-security.integration.js",
     "artifact": "node scripts/contract-artifact.mjs",
+    "prepare:db-repair": "node scripts/prepare-database-repair.mjs",
     "reconcile": "node --env-file-if-exists=.env scripts/reconcile.mjs",
     "deploy:monad:testnet": "node --env-file-if-exists=.env scripts/deploy-contract.mjs"
   },
