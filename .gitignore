@@ -10,3 +10,4 @@ coverage/
 dist/shared.bundle.js
 test-results/
 playwright-report/
+deployments/*.local.json
