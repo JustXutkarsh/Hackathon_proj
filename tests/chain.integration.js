@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import ganache from 'ganache';
 import { BrowserProvider, ContractFactory, keccak256, ZeroAddress } from 'ethers';
 import { compileContract } from '../scripts/compile-contract.mjs';
-import { detailsHash, parseMon, parseCreated, verifyProvider, readEscrow, verifyTransaction, finalizedReceipt, transactionFor } from '../dist/chain.js';
+import { detailsHash, parseMon, parseCreated, verifyProvider, readEscrow, verifyTransaction, finalizedReceipt, transactionFor, quoteTransaction } from '../dist/chain.js';
 
 let chain, provider, contract, owner, a, b, recipient, config, plan;
 before(async () => {
@@ -22,6 +22,16 @@ before(async () => {
 });
 after(async () => { provider?.destroy(); await chain?.disconnect(); });
 
+test('Monad fee quotes round a small gas margin up without overriding wallet fee prices', async () => {
+  const request=transactionFor(plan,'create',plan.organizer_wallet);
+  const stub={estimateGas:async tx=>{assert.deepEqual(tx,{...request,from:plan.organizer_wallet});return 201n;},
+    send:async(method,args)=>{assert.equal(method,'eth_gasPrice');assert.deepEqual(args,[]);return '0x17bfac7c00';}};
+  const quote=await quoteTransaction(stub,request,plan.organizer_wallet);
+  assert.equal(quote.request.gasLimit,217n);assert.equal(quote.gasPrice,102000000000n);assert.equal(quote.cost,217n*102000000000n);
+  assert.deepEqual(Object.keys(quote.request).sort(),['data','gasLimit','to','value']);assert.equal(quote.request.value,0n);
+  stub.send=async()=> '0x0';await assert.rejects(quoteTransaction(stub,request,plan.organizer_wallet),/estimate is unavailable/);
+  stub.estimateGas=async()=>{throw Error('simulation reverted');};await assert.rejects(quoteTransaction(stub,request,plan.organizer_wallet),/simulation reverted/);
+});
 test('exact decimal amounts and verified deployment/network are required', async () => {
   assert.equal(parseMon('0.000000000000000001'),1n);
   for (const value of ['0','-1','1e3','0.0000000000000000001','NaN']) assert.throws(()=>parseMon(value));
