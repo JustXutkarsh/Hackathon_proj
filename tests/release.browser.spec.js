@@ -141,6 +141,7 @@ test('rejected approval and a last-spot revert never become successful deposits'
   const p=await makePlan('Last spot'),control={rejectTransaction:true};await setup(context,1,control);await page.goto(`/plan/${p.token}`);await page.getByRole('button',{name:'Connect wallet',exact:true}).click();await page.getByRole('button',{name:'Review contribution'}).click();await approve(page);
   await expect(page.locator('#form-error')).toContainText('Wallet request rejected');expect(await contract.hasJoined(p.chain_plan_id,accounts[1])).toBe(false);
   control.rejectTransaction=false;await page.getByRole('button',{name:'Close dialog'}).click();await page.getByRole('button',{name:'Review contribution'}).click();
+  await reviewReady(page);
   for(const i of [0,2])await(await contract.connect(await provider.getSigner(i)).join(p.chain_plan_id,{value:10000000000000000n})).wait();
   await approve(page);await expect(page.getByRole('status').filter({hasText:'Transaction reverted'})).toBeVisible();expect(await contract.hasJoined(p.chain_plan_id,accounts[1])).toBe(false);await expect(page.locator('#receipt-list')).toContainText('failed');
 });
