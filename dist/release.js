@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { MONAD_TESTNET, walletEscrow, readEscrow, readProvider, verifyProvider, transactionFor, parseMon, formatMon, validWallet, checksum, explorerTx, detailsHash } from './chain.js';
+import { MONAD_TESTNET, walletEscrow, readEscrow, readProvider, verifyProvider, transactionFor, quoteTransaction, parseMon, formatMon, validWallet, checksum, explorerTx, detailsHash } from './chain.js';
 
 const $=s=>document.querySelector(s),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date=v=>new Intl.DateTimeFormat('en-IN',{dateStyle:'medium',timeStyle:'short'}).format(new Date(v));
@@ -160,14 +160,12 @@ async function prepare(p,action) {
     if(!p.chain_verified)fail('Escrow has not been verified.');
     await readEscrow(p,w.address);
   }
-  const request=transactionFor(p,action,w.address),gas=(await w.provider.estimateGas({...request,from:w.address}))*120n/100n;
-  const fee=await w.provider.getFeeData(),price=fee.maxFeePerGas||fee.gasPrice;
-  if(!price)fail('Network fee estimate is unavailable. Retry.');
-  const cost=gas*price,balance=await w.provider.getBalance(w.address);
+  const quote=await quoteTransaction(w.provider,transactionFor(p,action,w.address),w.address),request=quote.request;
+  const cost=quote.cost,balance=await w.provider.getBalance(w.address);
   if(balance<cost+request.value)fail('Not enough test MON for this contribution and its network fee.');
   if(generation!==epoch||identity!==user?.id)fail('Wallet or account changed. Prepare the transaction again.');
   const names={create:'Publish escrow',join:'Commit contribution',cancel:'Cancel and open refunds',collect:'Collect funds',refund:'Claim refund'};
-  modal(`<h2>${esc(names[action])}</h2><p>${esc(p.title)}</p><p>Monad testnet &middot; ${p.target} funded wallet slots<br>Your contribution: <strong>${esc(formatMon(p.contribution_wei))} test MON</strong><br>Total required: <strong>${esc(formatMon(BigInt(p.contribution_wei)*BigInt(p.target)))} test MON</strong><br>Funding deadline: ${esc(date(p.deadline))} (${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)})</p><p>Recipient: <code class="wallet-address">${esc(p.recipient_wallet)}</code></p><p>Estimated maximum network fee: <strong>${esc(formatMon(cost))} test MON</strong></p><p>This submits an onchain transaction. Publication permanently fixes the recipient and financial terms. It does not deposit the organizer's contribution.</p>${rules}<label class="check-label"><input type="checkbox" id="acknowledge"> I accept these rules and the immutable financial terms and recipient.</label><button class="primary full" id="approve-transaction">Approve in wallet</button>`);
+  modal(`<h2>${esc(names[action])}</h2><p>${esc(p.title)}</p><p>Monad testnet &middot; ${p.target} funded wallet slots<br>Your contribution: <strong>${esc(formatMon(p.contribution_wei))} test MON</strong><br>Total required: <strong>${esc(formatMon(BigInt(p.contribution_wei)*BigInt(p.target)))} test MON</strong><br>Funding deadline: ${esc(date(p.deadline))} (${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)})</p><p>Recipient: <code class="wallet-address">${esc(p.recipient_wallet)}</code></p><p>Estimated network fee at current RPC price: <strong>${esc(formatMon(cost))} test MON</strong>. This is not a fee cap. Your wallet sets the final fee; review it before signing. Monad charges for the full gas limit.</p><details><summary>Transaction details</summary><p>Chain ID: 10143<br>Transaction value: ${esc(formatMon(request.value))} test MON<br>Estimated gas: ${quote.estimatedGas}<br>Gas limit (7.5% margin): ${request.gasLimit}<br>RPC gas price: ${esc(formatMon(quote.gasPrice*1000000000n))} gwei</p><p>Escrow destination: <code class="wallet-address">${esc(request.to)}</code></p><p>Metadata commitment: <code class="wallet-address">${esc(p.metadata_hash)}</code></p><p>Calldata: <code class="wallet-address">${esc(request.data)}</code></p></details><p>This submits an onchain transaction. Publication permanently fixes the recipient and financial terms. It does not deposit the organizer's contribution.</p>${rules}<label class="check-label"><input type="checkbox" id="acknowledge"> I accept these rules and the immutable financial terms and recipient.</label><button class="primary full" id="approve-transaction">Approve in wallet</button>`);
   $('#approve-transaction').onclick=()=>run(async()=>{
     if(!$('#acknowledge').checked)fail('Acknowledge the funding rules before continuing.');
     if(generation!==epoch||identity!==user?.id)fail('Wallet or account changed. Prepare the transaction again.');
@@ -178,7 +176,7 @@ async function prepare(p,action) {
     if(generation!==epoch||identity!==user?.id)fail('Wallet or account changed. Prepare the transaction again.');
     localStorage.setItem(storageKey,JSON.stringify(transactions));
     status('Awaiting wallet approval.');
-    const hash=await w.signer.sendUncheckedTransaction({...request,gasLimit:gas,...(fee.maxFeePerGas?{maxFeePerGas:fee.maxFeePerGas,maxPriorityFeePerGas:fee.maxPriorityFeePerGas||0n}:{gasPrice:price})});
+    const hash=await w.signer.sendUncheckedTransaction(request);
     savePending({hash,address:w.address,action,submitted_at:new Date().toISOString()});
     $('#modal').close();render();status('Submitted. Waiting for a verified receipt.');
     for(let i=0;i<10;i++){const result=await api('receipt',{token,hash});if(result.status!=='submitted'){savePending(null);await refresh(result.status==='failed'?'Transaction reverted. Your network fee may have been spent; check the receipt.':action==='refund'?'Refund claimed and verified.':'Transaction confirmed and verified.');return;}await new Promise(resolve=>setTimeout(resolve,1500));}

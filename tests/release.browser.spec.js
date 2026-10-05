@@ -61,7 +61,7 @@ async function setup(context,index=undefined,control={}){
     await context.exposeBinding('testWalletRequest',async(_,request)=>{
       if(['eth_accounts','eth_requestAccounts'].includes(request.method))return [accounts[control.walletIndex]];
       if(request.method==='personal_sign'){if(control.rejectSignature)throw {code:4001,message:'Signature rejected'};return new Wallet(chain.getInitialAccounts()[request.params[1].toLowerCase()].secretKey).signMessage(getBytes(request.params[0]));}
-      if(request.method==='eth_sendTransaction'){control.sends++;if(control.rejectTransaction)throw {code:4001,message:'Transaction rejected'};}
+      if(request.method==='eth_sendTransaction'){control.sends++;control.lastTransaction=request.params[0];if(control.rejectTransaction)throw {code:4001,message:'Transaction rejected'};}
       return chain.request(request);
     });
     await context.addInitScript(()=>{const handlers={};window.ethereum={on:(event,fn)=>(handlers[event]??=[]).push(fn),request:r=>window.testWalletRequest(r),emit:event=>(handlers[event]||[]).forEach(fn=>fn([]))};});
@@ -106,11 +106,15 @@ test('anonymous invitation restores through auth, direct reload works, and remov
 });
 test('two accounts publish, recover after database outage, deposit and collect with actual local EVM receipts',async({browser})=>{
   test.setTimeout(90000);const ca=await browser.newContext({permissions:['clipboard-read','clipboard-write']}),cb=await browser.newContext();
-  try{await setup(ca,0);await setup(cb,1);const a=await ca.newPage(),b=await cb.newPage();await a.goto('/');await a.getByRole('button',{name:'New plan',exact:true}).click();
+  try{const control={};await setup(ca,0,control);await setup(cb,1);const a=await ca.newPage(),b=await cb.newPage();await a.goto('/');await a.getByRole('button',{name:'New plan',exact:true}).click();
     await a.getByLabel('Plan title').fill('Saturday sports');await a.getByLabel('Location',{exact:true}).fill('Neighborhood turf');await a.getByLabel('Short description').fill('Six friends, one match.');await a.getByLabel('Participant slots').fill('2');await a.getByLabel('Recipient wallet').fill(accounts[3]);
     await expect(a.locator('#funding-total')).toHaveText('0.02 test MON');await a.getByRole('button',{name:'Save draft for review'}).click();await expect(a).toHaveURL(/\/plan\//);
     await expect(a.getByRole('button',{name:'Copy invitation link'})).toHaveCount(0);await a.getByRole('button',{name:'Connect wallet',exact:true}).click();await a.getByRole('button',{name:'Review and publish escrow'}).click();
-    await reviewReady(a);const before=await contract.nextId();state.failRecord=true;await approve(a);await expect(a.getByRole('status').filter({hasText:'Submitted create.'})).toBeVisible();
+    await reviewReady(a);await a.getByText('Transaction details',{exact:true}).click();await expect(a.locator('#modal')).toContainText('Transaction value: 0.0 test MON');await expect(a.locator('#modal')).toContainText((await contract.getAddress()).toLowerCase());
+    await a.setViewportSize({width:375,height:812});expect(await a.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await a.screenshot({path:'test-results/release-publication-details-mobile.png',fullPage:true});
+    const before=await contract.nextId();state.failRecord=true;await approve(a);await expect(a.getByRole('status').filter({hasText:'Submitted create.'})).toBeVisible();
+    for(const key of ['gasPrice','maxFeePerGas','maxPriorityFeePerGas'])expect(control.lastTransaction).not.toHaveProperty(key);
+    expect(BigInt(control.lastTransaction.value)).toBe(0n);expect(control.lastTransaction.to.toLowerCase()).toBe((await contract.getAddress()).toLowerCase());
     expect(await a.evaluate(()=>Object.keys(JSON.parse(localStorage.getItem('countmein-pending-v2'))).length)).toBe(1);expect(await contract.nextId()).toBe(before+1n);
     await expect(a.getByRole('status').filter({hasText:'Database synchronization failed.'})).toBeVisible();
     state.failRecord=false;await a.reload();await expect(a.getByRole('button',{name:'Copy invitation link'})).toBeVisible();await a.getByRole('button',{name:'Check transaction'}).click();await a.getByRole('button',{name:'Verify receipt'}).click();

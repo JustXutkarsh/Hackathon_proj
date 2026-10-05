@@ -90,6 +90,14 @@ export function transactionFor(p, action, address) {
   if (!method) throw Error('Unknown escrow action.');
   return {to:p.escrow_address,data:iface.encodeFunctionData(method,args),value:action === 'join' ? BigInt(p.contribution_wei) : 0n};
 }
+export async function quoteTransaction(provider, request, address) {
+  const estimatedGas = await provider.estimateGas({...request,from:address});
+  // Monad bills the gas limit. Use its documented 7.5% starting margin, rounded up.
+  const gasLimit = (estimatedGas*10750n+9999n)/10000n;
+  const gasPrice = BigInt(await provider.send('eth_gasPrice',[]));
+  if (estimatedGas <= 0n || gasPrice <= 0n) throw invalid('Network fee estimate is unavailable. Retry.');
+  return {request:{...request,gasLimit},estimatedGas,gasPrice,cost:gasLimit*gasPrice};
+}
 export async function verifyTransaction(p, action, address, hash, provider = readProvider()) {
   const receipt = await finalizedReceipt(hash,provider);
   if (!receipt) return null;
